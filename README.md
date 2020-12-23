@@ -28,7 +28,7 @@ Core Features
     - Embed playlists from YouTube
       - Add/remove videos through YouTube
       - ‘highlights’ playlist
-4. Admin page
+  4. Admin page
   - Add / remove items from the store
   - product templates (clothing, music)
   - upload files (images, audio)
