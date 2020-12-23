@@ -35,4 +35,4 @@ Core Features
   - Purchase logs 
     - item, date, price, buyer
     - Stored externally (dynamoDB)
-    - Total sales
+    - Total sales 
