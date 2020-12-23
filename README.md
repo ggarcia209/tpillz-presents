@@ -3,32 +3,32 @@ Webapp and website built for client that features an online store, media sharing
 
 Core Features
 1. Store
-  A. Beat Previews (mp3)
-    - Purchase options for complete audio file download (.WAV)
-      - Basic lease
-      - Premium lease (exclusive rights)
-        - Completely remove preview from store when purchased
-      - Contracts for both leases (initiate purchase -> sign contract digitally -> complete purchase)
-  B. Clothing
-  C. Payment services (Paypal, Venmo, CashApp, Stripe)
-  D. Coupon codes / sales 
+  - Beat Previews (mp3)
+  - Purchase options for complete audio file download (.WAV)
+    - Basic lease
+    - Premium lease (exclusive rights)
+      - Completely remove preview from store when purchased
+    - Contracts for both leases (initiate purchase -> sign contract digitally -> complete purchase)
+  - Clothing
+  - Payment services (Paypal, Venmo, CashApp, Stripe)
+  - Coupon codes / sales 
 2. Community section
-  A. Newsletter format (Blog with comments)
+  - Newsletter format (Blog with comments)
 3. Media page
-  A. Photos
+  - Photos
     - Events, promo, etc…
     - Add new photos
-  B. Premium content (future implementation)
+  - Premium content (future implementation)
     - Users sign up for site to view premium content.
-  C. Music
+  - Music
     - Album art with links to Spotify, Apple Music, etc…
     - DJ mixes - steaming platform links
-  D. Video 
+  - Video 
     - Music videos, blog videos, etc…
     - Embed playlists from YouTube
       - Add/remove videos through YouTube
       - ‘highlights’ playlist
-  4. Admin page
+4. Admin page
   - Add / remove items from the store
   - product templates (clothing, music)
   - upload files (images, audio)
