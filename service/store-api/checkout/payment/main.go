@@ -12,16 +12,17 @@ import (
 	"github.com/tpillz-presents/service/store-api/store"
 	"github.com/tpillz-presents/service/util/dbops"
 	"github.com/tpillz-presents/service/util/httpops"
-	"github.com/tpillz-presents/service/util/timeops"
 	"github.com/tpillz-presents/service/util/queueops"
+	"github.com/tpillz-presents/service/util/timeops"
 )
 
 const route = "/checkout/payment" // PUT
 
 const failMsg = "Request failed!"
 const successMsg = "Request succeeded!"
+const orderTimeoutMsg = "Order expired! Please restart the checkout process and try again."
 
-const CASalesTaxRate = .0725  // 7.25 % CA State sales tax rate
+const CASalesTaxRate = .0725 // 7.25 % CA State sales tax rate
 
 type customerInfo struct {
 	UserID          string `json:"user_id"`
@@ -36,18 +37,21 @@ type customerInfo struct {
 }
 
 type billingInfo struct {
-	UserID          string `json:"user_id"`
-	UserEmail       string `json:"user_email"`
-	FirstName       string `json:"first_name"`
-	LCompany      string `json:"company"`
-	AddressLine1 string `json:"address_line_1"`
-	AddressLine2 string `json:"address_line_2"`
-	City         string `json:"city"`
-	State        string `json:"state"`
-	Country      string `json:"country"`
-	Zip          string `json:"zip"`
-	PhoneNumber  string `json:"phone_number"`
-	SaveInfo bool `json:"save_info"`
+	UserID        string `json:"user_id"`
+	UserEmail     string `json:"user_email"`
+	FirstName     string `json:"first_name"`
+	LastName      string `json:"last_name"`
+	Company       string `json:"company"`
+	AddressLine1  string `json:"address_line_1"`
+	AddressLine2  string `json:"address_line_2"`
+	City          string `json:"city"`
+	State         string `json:"state"`
+	Country       string `json:"country"`
+	Zip           string `json:"zip"`
+	PhoneNumber   string `json:"phone_number"`
+	PaymentMethod string `json:"payment_method"`
+	PaymentToken  string `json:"payment_token"` // token used to authorize payment
+	SaveInfo      bool   `json:"save_info"`
 }
 
 // list of tables function makes r/w calls to
@@ -55,27 +59,27 @@ var tables = []dbops.Table{
 	dbops.Table{ // customers table
 		Name:       dbops.CustomersTable,
 		PrimaryKey: dbops.CustomersPK,
-		SortKey:    ""
+		SortKey:    "",
 	},
 	dbops.Table{ // store items table
 		Name:       dbops.StoreItemsTable,
 		PrimaryKey: dbops.StoreItemPK,
-		SortKey:    dbops.StoreItemSK
+		SortKey:    dbops.StoreItemSK,
 	},
 	dbops.Table{ // shopping carts table
 		Name:       dbops.ShoppingCartsTable,
 		PrimaryKey: dbops.ShoppingCartsPK,
-		SortKey:    ""
+		SortKey:    "",
 	},
 	dbops.Table{ // transactions table
 		Name:       dbops.TransactionsTable,
 		PrimaryKey: dbops.TransactionsPK,
-		SortKey:    dbops.TransactionsSK
+		SortKey:    dbops.TransactionsSK,
 	},
 	dbops.Table{ // orders table
 		Name:       dbops.OrdersTable,
 		PrimaryKey: dbops.OrdersPK,
-		SortKey:    dbops.OrdersSK
+		SortKey:    dbops.OrdersSK,
 	},
 }
 
@@ -84,6 +88,8 @@ var DB = dbops.InitDB(tables)
 
 // RootHandler handles HTTP request to the root '/'
 func RootHandler(w http.ResponseWriter, r *http.Request) {
+	sqs := queueops.InitSesh()
+
 	// verify content-type
 	contentType := r.Header.Get("Content-Type")
 	if contentType != "application/json" {
@@ -92,7 +98,7 @@ func RootHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// decode JSON object from http request
-	data := customerInfo{}
+	data := billingInfo{}
 	var unmarshalErr *json.UnmarshalTypeError
 
 	decoder := json.NewDecoder(r.Body)
@@ -117,103 +123,118 @@ func RootHandler(w http.ResponseWriter, r *http.Request) {
 
 	// get order
 	orderID := generateOrderID(cust.UserID, cust.Orders)
-	order, err := dbops.GetOrder(DB, cust.UserID)
+	order, err := dbops.GetOrder(DB, cust.UserID, orderID)
 	if err != nil {
 		log.Printf("RootHandler failed: %v", err)
 		httpops.ErrResponse(w, "Internal Server Error: "+err.Error(), failMsg, http.StatusInternalServerError)
+		return
+	}
+
+	// check if existing order expired
+	init, err := timeops.ConvertStringToTimestamp(order.InitTime)
+	if err != nil {
+		log.Printf("RootHandler failed: %v", err)
+		httpops.ErrResponse(w, "Internal Server Error: "+err.Error(), failMsg, http.StatusInternalServerError)
+		return
+	}
+
+	ttl := time.Since(init)
+	if int(ttl.Milliseconds()) > order.TtlMs {
+		log.Printf("Order expired - payment not processed.")
+		httpops.ErrResponse(w, "Request expired!", orderTimeoutMsg, http.StatusOK)
 		return
 	}
 
 	// create transaction object
 	tx := &store.Transaction{
-		TransactionID: generateTxID()
-		UserID: cust.UserID,
-		OrderID: order.OrderID,
-		Timestamp: timeops.ConvertToTimestampString(time.Now())
-		Amount: 0.0,
+		TransactionID: "",
+		UserID:        cust.UserID,
+		OrderID:       order.OrderID,
+		Timestamp:     timeops.ConvertToTimestampString(time.Now()),
+		TotalAmount:   0.0,
 	}
+	tx.SetHashID()
 
 	// update order
 	updateOrder(data, cust, tx, order)
 
 	// stage objects for processing
-	stage := staging{
-		Order: order,
-		Customer: cust,
+	stage := queueops.Staging{
+		Order:       order,
+		Customer:    cust,
 		Transaction: tx,
 	}
 
-	// create stripe charge
-
-
-	// put transaction
-	err = dbops.PutTransaction(DB, tx)
+	// send objects to staging queue
+	url, err := queueops.GetQueueURL(sqs, queueops.StagingFifoQueue)
 	if err != nil {
 		log.Printf("RootHandler failed: %v", err)
 		httpops.ErrResponse(w, "Internal Server Error: "+err.Error(), failMsg, http.StatusInternalServerError)
 		return
 	}
+	msgID, err := queueops.SendStagingMessage(sqs, url, stage)
+	if err != nil {
+		log.Printf("RootHandler failed: %v", err)
+		log.Printf("staged order: %v", stage)
+		httpops.ErrResponse(w, "Internal Server Error: "+err.Error(), failMsg, http.StatusInternalServerError)
+		return
+	}
+	log.Printf("staging message sent: %v", msgID)
 
-	// put order
-	err = dbops.PutOrder(DB, order)
+	// process payment
+	// IN PROGRESS
+
+	// update transaction object with payment info
+	// IN PROGRESS
+	updateTx(tx, order)
+
+	// send payment confirmation message
+	status := createPaymentStatus(cust, order, tx)
+	url, err = queueops.GetQueueURL(sqs, queueops.PaymentStatusFifoQueue)
 	if err != nil {
 		log.Printf("RootHandler failed: %v", err)
 		httpops.ErrResponse(w, "Internal Server Error: "+err.Error(), failMsg, http.StatusInternalServerError)
 		return
 	}
-
-	// send order to order processing service (record in db, send to admin)
-
-	// update customer record
-	err = dbops.PutCustomer(DB, cust)
+	msgID, err = queueops.SendPaymentStatusMessage(sqs, url, status)
 	if err != nil {
 		log.Printf("RootHandler failed: %v", err)
 		httpops.ErrResponse(w, "Internal Server Error: "+err.Error(), failMsg, http.StatusInternalServerError)
 		return
 	}
+	log.Printf("payment status message sent: %v", msgID)
 
-	// generate customer receipt
+	// generate customer receipt to return to user
+	receipt := store.Receipt{}
+	receipt.New(cust, order)
 
-	// send receipt to customer email notification service
-
-	httpops.ErrResponse(w, "Successfully retreived site info: ", successMsg, http.StatusOK)
+	httpops.ErrResponse(w, "Order success! Receipt: : ", receipt, http.StatusOK)
 	return
 }
-
 
 func generateOrderID(userID string, orderCt int) string {
 	orderID := fmt.Sprintf("%s-%d", userID, orderCt)
 	return orderID
 }
 
-func createAddressString(addr, city, state, country, zip string) store.Address {
-	fmt := fmt.Sprintf("%s, %s, %s, %s %s", addr, city, state, country, zip)
-	return fmt
-}
-
 func updateOrder(info billingInfo, cust *store.Customer, tx *store.Transaction, order *store.Order) {
-	order.Complete = true
+	order.Paid = true
+	order.OrderStatus = store.OrderStatusPaid
 
 	order.TransactionID = tx.TransactionID
 	order.TxTimestamp = tx.Timestamp
 
-	order.SalesSubtotal = tx.SalesSubtotal
-	order.ShippingCost = tx.ShippingCost
-	order.SalesTax = tx.SalesTax
-	order.ChargesAndFees = tx.ChargesAndFees
-	order.OrderTotal = tx.TotalAmount
-
 	address := store.Address{
-		FirstName: info.FirstName,
-		LastName: info.LastName,
-		Company: info.Company,
+		FirstName:    info.FirstName,
+		LastName:     info.LastName,
+		Company:      info.Company,
 		AddressLine1: info.AddressLine1,
 		AddressLine2: info.AddressLine2,
-		City: info.City,
-		State: info.State,
-		Country: info.Country,
-		Zip: info.Zip,
-		PhoneNumber: info.PhoneNumber
+		City:         info.City,
+		State:        info.State,
+		Country:      info.Country,
+		Zip:          info.Zip,
+		PhoneNumber:  info.PhoneNumber,
 	}
 	order.BillingAddress = address
 
@@ -227,36 +248,48 @@ func updateOrder(info billingInfo, cust *store.Customer, tx *store.Transaction, 
 	cust.OpenOrder = false
 }
 
-// add error handling for duplicate queue creation
-func sendStagingMessage(stage staging) (string, error) {
-	url, err := gosqs.GetQueueURL(SQS, types.SiteInfoFifoQueue)
-	if err != nil {
-		log.Printf("sendValidationMessage failed: %v", err)
-		return "", err
+func createReceipt(cust *store.Customer, order *store.Order) store.Receipt {
+	receipt := store.Receipt{
+		UserID:          cust.UserID,
+		OrderID:         order.OrderID,
+		TransactionID:   order.TransactionID,
+		UserEmail:       cust.Email,
+		OrderSummary:    order.Items,
+		SalesSubtotal:   order.SalesSubtotal,
+		ShippingCost:    order.ShippingCost,
+		SalesTax:        order.SalesTax,
+		ChargesAndFees:  order.ChargesAndFees,
+		OrderTotal:      order.OrderTotal,
+		BillingAddress:  order.BillingAddress,
+		ShippingAddress: order.ShippingAddress,
 	}
-	// re-encode to JSON
-	json, err := json.Marshal(valid)
-	if err != nil {
-		log.Printf("sendValidationMessage failed: %v", err)
-		return "", err
-	}
+	return receipt
+}
 
-	options := gosqs.SendMsgOptions{
-		DelaySeconds:            gosqs.SendMsgDefault.DelaySeconds,
-		MessageAttributes:       nil,
-		MessageBody:             string(json),
-		MessageDeduplicationId:  gosqs.GenerateDedupeID(url),
-		MessageGroupId:          gosqs.GenerateDedupeID(url),
-		MessageSystemAttributes: nil,
-		QueueURL:                url,
+func createPaymentStatus(cust *store.Customer, order *store.Order, tx *store.Transaction) store.PaymentStatus {
+	status := store.PaymentStatus{
+		CustomerEmail: cust.Email,
+		CustomerID:    cust.UserID,
+		OrderID:       order.OrderID,
+		TransactionID: tx.TransactionID,
+		PaymentMethod: tx.PaymentMethod,
+		PaymentTxID:   tx.PaymentTxID,
+		TxStatus:      tx.PaymentStatus,
+		TxMessage:     tx.PaymentMessage,
 	}
+	return status
+}
 
-	resp, err := gosqs.SendMessage(SQS, options)
-	if err != nil {
-		log.Printf("sendValidationMessage failed: %v", err)
-		return "", err
-	}
-	return resp.MessageId, nil
+func updateTx(tx *store.Transaction, order *store.Order) {
+	tx.SalesSubtotal = order.SalesSubtotal
+	tx.SalesTax = order.SalesTax
+	tx.ShippingCost = order.ShippingCost
+	tx.ChargesAndFees = order.ChargesAndFees
+	tx.TotalAmount = order.OrderTotal
+	// tx.PaymentMethod
+	// tx.PaymentTxID
+	// payment tx timestamp?
+	tx.PaymentStatus = store.TxStatusComplete
 }
 
 func main() {

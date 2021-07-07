@@ -37,6 +37,12 @@ const ShoppingCartsTable = "tpillz-shopping-carts-dev"
 // ShoppingCartsPK contains the primary key name of the ShoppingCarts Table.
 const ShoppingCartsPK = "user_id"
 
+// ShippingMethodsTable contains the name of the ShippingMethods table.
+const ShippingMethodsTable = "tpillz-shipping-methods"
+
+// ShippingMethodsPK contains the primary key name of the ShippingMethods table.
+const ShippingMethodsPK = "method_name"
+
 // OrdersTable contains the name of the Orders table.
 const OrdersTable = "tpillz-orders-dev"
 
@@ -144,6 +150,25 @@ func PutShoppingCart(DB *dynamo.DbInfo, cart *store.ShoppingCart) error {
 	return nil
 }
 
+func GetShippingMethod(DB *dynamo.DbInfo, methodName string) (*store.ShippingMethod, error) {
+	q := dynamo.CreateNewQueryObj(methodName, "")
+	item, err := dynamo.GetItem(DB.Svc, q, DB.Tables[ShippingMethodsTable], &store.ShippingMethod{})
+	if err != nil {
+		log.Printf("GetShippingMethod failed: %v", err)
+		return &store.ShippingMethod{}, err
+	}
+	return item.(*store.ShippingMethod), nil
+}
+
+// PutShoppingCart puts a new ShoppingCart object to the ShoppingCartsTable.
+func PutShippingMethod(DB *dynamo.DbInfo, method *store.ShippingMethod) error {
+	err := dynamo.CreateItem(DB.Svc, method, DB.Tables[ShippingMethodsTable])
+	if err != nil {
+		log.Printf("PutShippingMethod failed: %v", err)
+	}
+	return nil
+}
+
 // GetTransaction retreives a Transaction object from the TransactionsTable.
 func GetTransaction(DB *dynamo.DbInfo, userID, txID string) (*store.Transaction, error) {
 	q := dynamo.CreateNewQueryObj(userID, txID)
@@ -200,6 +225,50 @@ func PutOrder(DB *dynamo.DbInfo, user *store.Order) error {
 	err := dynamo.CreateItem(DB.Svc, user, DB.Tables[OrdersTable])
 	if err != nil {
 		log.Printf("PutOrder failed: %v", err)
+	}
+	return nil
+}
+
+func UpdateOrderPaymentStatus(DB *dynamo.DbInfo, customerID, orderID, status string) error {
+	q := dynamo.CreateNewQueryObj(customerID, orderID)
+	q.UpdateCurrent("payment_status", status)
+	err := dynamo.UpdateItem(DB.Svc, q, DB.Tables[OrdersTable])
+	if err != nil {
+		log.Printf("UpdateOrderPaymentStatus failed: %v", err)
+		return err
+	}
+	return nil
+}
+
+func UpdateTxPaymentStatus(DB *dynamo.DbInfo, customerID, txID, status string) error {
+	q := dynamo.CreateNewQueryObj(customerID, txID)
+	q.UpdateCurrent("payment_status", status)
+	err := dynamo.UpdateItem(DB.Svc, q, DB.Tables[TransactionsTable])
+	if err != nil {
+		log.Printf("UpdateOrderPaymentStatus failed: %v", err)
+		return err
+	}
+	return nil
+}
+
+func UpdateTxPaymentMethod(DB *dynamo.DbInfo, customerID, txID, method string) error {
+	q := dynamo.CreateNewQueryObj(customerID, txID)
+	q.UpdateCurrent("payment_method", method)
+	err := dynamo.UpdateItem(DB.Svc, q, DB.Tables[TransactionsTable])
+	if err != nil {
+		log.Printf("UpdateOrderPaymentMethod failed: %v", err)
+		return err
+	}
+	return nil
+}
+
+func UpdateTxPaymentID(DB *dynamo.DbInfo, customerID, txID, paymentID string) error {
+	q := dynamo.CreateNewQueryObj(customerID, txID)
+	q.UpdateCurrent("payment_tx_id", paymentID)
+	err := dynamo.UpdateItem(DB.Svc, q, DB.Tables[TransactionsTable])
+	if err != nil {
+		log.Printf("UpdateOrderPaymentID failed: %v", err)
+		return err
 	}
 	return nil
 }
