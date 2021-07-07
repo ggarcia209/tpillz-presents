@@ -30,7 +30,7 @@ func TestStringToTimestamp(t *testing.T) {
 		{input: "2021-5-30 12:22:24", want: nil},  // FAIL
 	}
 	for _, test := range tests {
-		ts, err := ConvertStringtoTimestamp(test.input)
+		ts, err := ConvertStringToTimestamp(test.input)
 		if err != test.want {
 			t.Errorf("FAIL: %v", err)
 		} else {

@@ -28,7 +28,7 @@ func ConvertToTimestampString(t time.Time) string {
 
 // ConvertStringToTimestamp converts timestamp string in 'MM-DD-YYYY HH:MM:SS' format
 // to a time.Time object
-func ConvertStringtoTimestamp(s string) (time.Time, error) {
+func ConvertStringToTimestamp(s string) (time.Time, error) {
 	fmt := "01-02-2006 15:04:05"
 	time, err := time.Parse(fmt, s)
 	if err != nil {

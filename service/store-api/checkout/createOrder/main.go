@@ -1,10 +1,14 @@
 package main
 
+// createOrder generates a new order after receiving user input shipping information.
+// Order total price is calculated after receiving user input for shipping option.
+
 import (
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"time"
 
@@ -15,30 +19,32 @@ import (
 	"github.com/tpillz-presents/service/util/timeops"
 )
 
-const route = "/add-to-cart" // PUT
+// UPDATE
+const route = "/checkout/new-order" // PUT
 
 const failMsg = "Request failed!"
 const successMsg = "Request succeeded!"
 
-type customerInfo struct {
-	UserID          string `json:"user_id"`
-	UserEmail       string `json:"user_email"`
-	FirstName       string `json:"first_name"`
-	LastName        string `json:"last_name"`
-	ShippingAddress string `json:"shipping_address"`
-	ShippingCity    string `json:"shipping_city"`
-	ShippingState   string `json:"shipping_state"`
-	ShippingCountry string `json:"shipping_country"`
-	ShippingZip     string `json:"shipping_zip"`
-}
+const CASalesTaxRate = .0725 // 7.25 % CA State sales tax rate
+const FeesTotal = 0.00
 
-type billingInfo struct {
-	BillingName    string `json:"billing_name"`
-	BillingAddress string `json:"billing_address"`
-	BililngCity    string `json:"billing_city"`
-	BillingState   string `json:"billing_state"`
-	BillingCountry string `json:"billing_country"`
-	BillingZip     string `json:"billing_zip"`
+// customerInfo represents the form info submitted to the checkout page
+// IN-PROGRESS - get shipping cost (shippo api)
+type customerInfo struct {
+	UserID         string  `json:"user_id"`
+	UserEmail      string  `json:"user_email"`
+	FirstName      string  `json:"first_name"`
+	LastName       string  `json:"last_name"`
+	Company        string  `json:"company"`
+	AddressLine1   string  `json:"address_line_1"`
+	AddressLine2   string  `json:"address_line_2"`
+	City           string  `json:"city"`
+	State          string  `json:"state"`
+	Country        string  `json:"country"`
+	Zip            string  `json:"zip"`
+	ShippingMethod string  `json:"shipping_method"`
+	PhoneNumber    string  `json:"phone_number"`
+	ShippingCost   float32 `json:"shipping_cost"`
 }
 
 // list of tables function makes r/w calls to
@@ -55,6 +61,10 @@ var tables = []dbops.Table{
 		Name:       dbops.ShoppingCartsTable,
 		PrimaryKey: dbops.ShoppingCartsPK,
 		SortKey:    ""},
+	dbops.Table{ // transactions table
+		Name:       dbops.OrdersTable,
+		PrimaryKey: dbops.OrdersPK,
+		SortKey:    dbops.OrdersSK},
 	dbops.Table{ // transactions table
 		Name:       dbops.TransactionsTable,
 		PrimaryKey: dbops.TransactionsPK,
@@ -131,29 +141,45 @@ func RootHandler(w http.ResponseWriter, r *http.Request) {
 func createOrder(info customerInfo, cust *store.Customer, cart *store.ShoppingCart) *store.Order {
 	// crate order & set intitial fields
 	order := &store.Order{}
-	order.OrderID = generateOrderID(cust.UserID, cust.Orders)
+	if cust.OpenOrder {
+		order.OrderID = cust.OpenOrderID // overwrite existing open order with updated order info
+	} else {
+		order.OrderID = generateOrderID(cust.UserID, cust.Orders)
+	}
 	order.UserID = cust.UserID
 
 	for _, item := range cart.Items {
 		order.Items = append(order.Items, item)
 	}
-	order.SalesSubtotal = cart.Subtotal
+	order.SalesSubtotal = round(cart.Subtotal)
+	order.ShippingCost = round(info.ShippingCost)
+	order.SalesTax = round(order.SalesSubtotal * CASalesTaxRate)
+	order.ChargesAndFees = round(FeesTotal)
+	order.OrderTotal = order.SalesSubtotal + order.ShippingCost + order.SalesTax + order.ChargesAndFees
 	order.TotalItems = cart.TotalItems
 
-	addr := createAddressString(info.ShippingAddress, info.ShippingCity, info.ShippingState, info.ShippingCountry, info.ShippingZip)
-	order.ShippingFirstName, order.ShippingLastName = info.FirstName, info.LastName
+	addr := createAddress(info)
 	order.ShippingAddress = addr
 
-	order.TtlMs = 300000 // 5 minutes
+	order.OrderWeightOzs = cart.CartWeightOzs
+	order.OrderWeightLbs = cart.CartWeightLbs
+	order.OrderWeightKgs = cart.CartWeightKgs
+
+	order.TtlMs = 600000 // 10 minutes
 	initTime := time.Now()
 	initTimeStr := timeops.ConvertToTimestampString(initTime)
 	orderDateStr := timeops.ConvertToDateString(initTime)
 	order.InitTime = initTimeStr
 	order.OrderDate = orderDateStr
 
+	order.OrderStatus = store.OrderStatusOpen
+
 	// update customer object
-	cust.Orders += 1
-	cust.OpenOrder = true
+	if !cust.OpenOrder {
+		cust.Orders += 1
+		cust.OpenOrder = true
+		cust.OpenOrderID = order.OrderID
+	}
 
 	return order
 }
@@ -163,9 +189,26 @@ func generateOrderID(userID string, orderCt int) string {
 	return orderID
 }
 
-func createAddressString(addr, state, city, country, zip string) string {
-	fmt := fmt.Sprintf("%s, %s, %s, %s %s", addr, state, city, country, zip)
-	return fmt
+func createAddress(info customerInfo) store.Address {
+	addr := store.Address{
+		FirstName:    info.FirstName,
+		LastName:     info.LastName,
+		Company:      info.Company,
+		AddressLine1: info.AddressLine1,
+		AddressLine2: info.AddressLine2,
+		City:         info.City,
+		State:        info.State,
+		Country:      info.Country,
+		Zip:          info.Zip,
+		PhoneNumber:  info.PhoneNumber,
+	}
+	return addr
+}
+
+func round(x float32) float32 {
+	price := float64(x)
+	unit := 0.01 // round float values to next cent
+	return float32(math.Ceil(price/unit) * unit)
 }
 
 func main() {

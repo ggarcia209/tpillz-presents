@@ -1,3 +1,5 @@
+/* packakge queueops wraps the gosqs methods with retry logic for common SQS operations used
+by the application. */
 package queueops
 
 import (
@@ -15,22 +17,19 @@ import (
 // objects awaiting processing pending receipt of a StripeTxStatus message.
 const StagingFifoQueue = "staging-queue.fifo"
 
-// StripeTxStatusFifoQueue contains the name of the Stripe Transaction Status queue.
+// PaymentStatusFifoQueue contains the name of the Payment Status queue.
 // Messages sent to this queue are used to confirm the successful completion of
-// Stripe charges before processing the objects sent to the Staging queue.
-const StripeTxStatusFifoQueue = "stripe-tx-status.fifo"
+// payments before processing the objects sent to the Staging queue.
+const PaymentStatusFifoQueue = "stripe-tx-status.fifo"
 
-// StripeTxStatusSuccess contains the status code for successful stripe transactions.
-const StripeTxStatusSuccess = "STRIPE_TX_SUCCESS"
+// InventoryUpdateFifoQueue contains the name of the Inventory Update queue.
+// Messages sent to this queue are used to update inventory counts when an order
+// is created or cancelled.
+const InventoryUpdateFifoQueue = "inventory-update.fifo"
 
-// StripeTxStatusFail contains the status code for failed stripe transactions.
-const StripeTxStatusFail = "STRIPE_TX_FAIL"
+const InventoryActionAdd = "ADD"
 
-// ValidStripeTxStatus contains the valid values for Stripe transaction statuses.
-var ValidStripeTxStatus = map[string]bool{
-	StripeTxStatusFail:    true,
-	StripeTxStatusSuccess: true,
-}
+const InventoryActionSub = "SUB"
 
 // Staging contains pkg store objects to be staged in the StagingQueue, which are processed
 // on receipt of a StripeTxStatus message.
@@ -40,14 +39,11 @@ type Staging struct {
 	Transaction *store.Transaction `json:"transaction"`
 }
 
-// StripeTxStatus contains message info to send to the StripeTxStatus fifo queue.
-// Objects staged in the Staging fifo queue are processed on receipt of this message
-type StripeTxStatus struct {
-	OrderID        string `json:"order_id"`
-	StripeTxID     string `json:"stripe_tx_id"`
-	StageMessageID string `json:"stage_message_id"`
-	TxStatus       string `json:"tx_status"`
-	TxMessage      string `json:"tx_message"`
+// InventoryUpdate is used to update inventory counts when a new order is made.
+type InventoryUpdate struct {
+	UserEmail string `json:"user_email"`
+	OrderID   string `json:"order_id"`
+	Action    string `json:"action"`
 }
 
 // return type for PollStagingQueue
@@ -58,10 +54,10 @@ type stagingPollResponse struct {
 }
 
 // return type for PollStripeTxStatusQueue
-type stripeTxStatusPollResponse struct {
-	Statuses       []StripeTxStatus `json:"statuses"`
-	MessageIDs     []string         `json:"message_ids"`
-	ReceiptHandles []string         `json:"receipt_handles"`
+type paymentStatusPollResponse struct {
+	Statuses       []store.PaymentStatus `json:"statuses"`
+	MessageIDs     []string              `json:"message_ids"`
+	ReceiptHandles []string              `json:"receipt_handles"`
 }
 
 // InitSesh wraps the gosqs.InitSesh() method.
@@ -79,6 +75,49 @@ func GetQueueURL(svc interface{}, queueName string) (string, error) {
 	return url, nil
 }
 
+// SendInventoryUpdateMessage sends an InventoryUpdate message to the InventoryUpdate FIFO queue.
+func SendInventoryUpdateMessage(svc interface{}, url string, update InventoryUpdate) (string, error) {
+	// re-encode to JSON
+	json, err := json.Marshal(update)
+	if err != nil {
+		log.Printf("SendInventoryUpdateMessage failed: %v", err)
+		return "", err
+	}
+
+	deDupeID := gosqs.GenerateDedupeID(string(json))
+
+	options := gosqs.SendMsgOptions{
+		DelaySeconds:            gosqs.SendMsgDefault.DelaySeconds,
+		MessageAttributes:       nil,
+		MessageBody:             string(json),
+		MessageDeduplicationId:  deDupeID,
+		MessageGroupId:          deDupeID,
+		MessageSystemAttributes: nil,
+		QueueURL:                url,
+	}
+
+	retries := 0
+	maxRetries := 2
+	backoff := 1000
+
+	for {
+		resp, err := gosqs.SendMessage(svc, options)
+		if err != nil {
+			// retry with backoff if error
+			if retries > maxRetries {
+				log.Printf("SendInventoryUpdateMessage failed: %v -- max retries exceeded", err)
+				return "", err
+			}
+			log.Printf("SendInventoryUpdateMessage failed: %v -- retrying...", err)
+			time.Sleep(time.Duration(backoff) * time.Millisecond)
+			backoff = backoff * 2
+			retries++
+			continue
+		}
+		return resp.MessageId, nil
+	}
+}
+
 // SendStagingMessage sends a Staging object to the Staging Fifo queue
 // and returns the message ID.
 func SendStagingMessage(svc interface{}, url string, stage Staging) (string, error) {
@@ -89,53 +128,86 @@ func SendStagingMessage(svc interface{}, url string, stage Staging) (string, err
 		return "", err
 	}
 
+	deDupeID := gosqs.GenerateDedupeID(string(json))
+
 	options := gosqs.SendMsgOptions{
 		DelaySeconds:            gosqs.SendMsgDefault.DelaySeconds,
 		MessageAttributes:       nil,
 		MessageBody:             string(json),
-		MessageDeduplicationId:  gosqs.GenerateDedupeID(url),
-		MessageGroupId:          gosqs.GenerateDedupeID(url),
+		MessageDeduplicationId:  deDupeID,
+		MessageGroupId:          deDupeID,
 		MessageSystemAttributes: nil,
 		QueueURL:                url,
 	}
 
-	resp, err := gosqs.SendMessage(svc, options)
-	if err != nil {
-		log.Printf("SendStagingMessage failed: %v", err)
-		return "", err
+	retries := 0
+	maxRetries := 4
+	backoff := 1000
+
+	for {
+		resp, err := gosqs.SendMessage(svc, options)
+		if err != nil {
+			// retry with backoff if error
+			if retries > maxRetries {
+				log.Printf("SendStagingMessage failed: %v -- max retries exceeded", err)
+				return "", err
+			}
+			log.Printf("SendStagingMessage failed: %v -- retrying...", err)
+			time.Sleep(time.Duration(backoff) * time.Millisecond)
+			backoff = backoff * 2
+			retries++
+			continue
+		}
+		return resp.MessageId, nil
 	}
-	return resp.MessageId, nil
 }
 
-// SendStripeTxStatusMessage sends a StripeTxStatus object to the StripeTxStatus Fifo queue
+// SendPaymentStatusMessage sends a PaymentStatus object to the PaymentStatus Fifo queue
 // and returns the message ID.
-func SendStripeTxStatusMessage(svc interface{}, url string, status StripeTxStatus) (string, error) {
+func SendPaymentStatusMessage(svc interface{}, url string, status store.PaymentStatus) (string, error) {
 	// re-encode to JSON
 	json, err := json.Marshal(status)
 	if err != nil {
-		log.Printf("SendStripeTxStatusMessage failed: %v", err)
+		log.Printf("SendPaymentStatusMessage failed: %v", err)
 		return "", err
 	}
+
+	deDupeID := gosqs.GenerateDedupeID(string(json))
 
 	options := gosqs.SendMsgOptions{
 		DelaySeconds:            gosqs.SendMsgDefault.DelaySeconds,
 		MessageAttributes:       nil,
 		MessageBody:             string(json),
-		MessageDeduplicationId:  gosqs.GenerateDedupeID(url),
-		MessageGroupId:          gosqs.GenerateDedupeID(url),
+		MessageDeduplicationId:  deDupeID,
+		MessageGroupId:          deDupeID,
 		MessageSystemAttributes: nil,
 		QueueURL:                url,
 	}
 
-	resp, err := gosqs.SendMessage(svc, options)
-	if err != nil {
-		log.Printf("SendStripeTxStatusMessage failed: %v", err)
-		return "", err
+	retries := 0
+	maxRetries := 4
+	backoff := 1000
+
+	for {
+		resp, err := gosqs.SendMessage(svc, options)
+		if err != nil {
+			// retry with backoff if error
+			if retries > maxRetries {
+				log.Printf("SendPaymentStatusMessage failed: %v -- max retries exceeded", err)
+				return "", err
+			}
+			log.Printf("SendPaymentStatusMessage failed: %v -- retrying...", err)
+			time.Sleep(time.Duration(backoff) * time.Millisecond)
+			backoff = backoff * 2
+			retries++
+			continue
+		}
+		return resp.MessageId, nil
 	}
-	return resp.MessageId, nil
+
 }
 
-// add error handling for duplicate queue creation
+// PollStagingQueue receives 10 messages from the order staging queue.
 func PollStagingQueue(svc interface{}, url string) (stagingPollResponse, error) {
 	resp := stagingPollResponse{}
 	idSet := make(map[string]bool) // check for duplicates
@@ -207,13 +279,13 @@ func PollStagingQueue(svc interface{}, url string) (stagingPollResponse, error) 
 
 }
 
-// add error handling for duplicate queue creation
-func PollStripeTxStatusQueue(svc interface{}, url string) (stripeTxStatusPollResponse, error) {
-	resp := stripeTxStatusPollResponse{}
+// PollPaymentStatusQueue receives 3 messages from the Stripe Transaction Status queue.
+func PollPaymentStatusQueue(svc interface{}, url string) (paymentStatusPollResponse, error) {
+	resp := paymentStatusPollResponse{}
 	idSet := make(map[string]bool) // check for duplicates
 	handles := []string{}          // list of receipt handles
 	messageIDs := []string{}       // list of message IDs
-	statuses := []StripeTxStatus{}
+	statuses := []store.PaymentStatus{}
 
 	// set receive message options
 	options := gosqs.RecMsgOptions{
@@ -261,7 +333,7 @@ func PollStripeTxStatusQueue(svc interface{}, url string) (stripeTxStatusPollRes
 		}
 		// get stage info from json in message body
 		for _, msg := range msgs {
-			status := StripeTxStatus{}
+			status := store.PaymentStatus{}
 			err := json.Unmarshal([]byte(msg.Body), &status)
 			if err != nil {
 				log.Printf("PollStripeTxStatusQueue failed - json failed to unmarshall: %v (%v)", err, msg.MessageId)
@@ -280,7 +352,7 @@ func PollStripeTxStatusQueue(svc interface{}, url string) (stripeTxStatusPollRes
 	}
 }
 
-func ChangeMsgVisibility(svc interface{}, url string, messageIDs, handles []string) error {
+func ChangeMsgVisibility(svc interface{}, url string, messageIDs, handles []string, timeout int) error {
 	if len(messageIDs) != len(handles) {
 		err := fmt.Errorf("INVALID_ARGS")
 		log.Printf("ChangeMsgVisibility failed: %v", err)
@@ -296,7 +368,7 @@ func ChangeMsgVisibility(svc interface{}, url string, messageIDs, handles []stri
 		QueueURL:       url,
 		MessageIDs:     messageIDs,
 		ReceiptHandles: handles,
-		TimeoutSeconds: 0,
+		TimeoutSeconds: timeout,
 	}
 
 	retries := 0
@@ -327,7 +399,7 @@ func ChangeMsgVisibility(svc interface{}, url string, messageIDs, handles []stri
 		if len(output.Failed) > 0 {
 			if retries > maxRetries {
 				log.Printf("ChangeMsgVisibility failed: %v -- max retries exceeded", err)
-				return err
+				return fmt.Errorf("MAX_RETRIES_EXCEEDED")
 			}
 			retryIds := []string{}
 			retryHandles := []string{}
@@ -346,6 +418,89 @@ func ChangeMsgVisibility(svc interface{}, url string, messageIDs, handles []stri
 				MessageIDs:     retryIds,
 				ReceiptHandles: retryHandles,
 				TimeoutSeconds: 0,
+			}
+
+			time.Sleep(time.Duration(backoff) * time.Millisecond)
+			backoff = backoff * 2
+			retries++
+
+			if throttled {
+				log.Printf("Retrying throttled request...")
+			} else {
+				log.Printf("Retrying failed request...")
+			}
+
+			continue
+		}
+		return nil
+	}
+
+}
+
+func DeleteMessages(svc interface{}, url string, messageIDs, handles []string) error {
+	if len(messageIDs) != len(handles) {
+		err := fmt.Errorf("INVALID_ARGS")
+		log.Printf("DeleteMessages failed: %v", err)
+		return err
+	}
+	if len(messageIDs) == 0 {
+		err := fmt.Errorf("INVALID_ARGS")
+		log.Printf("DeleteMessages failed: %v", err)
+		return err
+	}
+	// cancel timeout for messages that don't match
+	batchInput := gosqs.DeleteMessageBatchRequest{
+		QueueURL:       url,
+		MessageIDs:     messageIDs,
+		ReceiptHandles: handles,
+	}
+
+	retries := 0
+	maxRetries := 4
+	backoff := 1000
+
+	retryHandlesMap := make(map[string]string)
+	for i, handle := range handles {
+		retryHandlesMap[messageIDs[i]] = handle
+	}
+
+	for {
+		output, err := gosqs.DeleteMessageBatch(svc, batchInput)
+		if err != nil {
+			// retry with backoff if error
+			if retries > maxRetries {
+				log.Printf("DeleteMessages failed: %v -- max retries exceeded", err)
+				return err
+			}
+			log.Printf("DeleteMessages error: %v -- retrying", err)
+			time.Sleep(time.Duration(backoff) * time.Millisecond)
+			backoff = backoff * 2
+			retries++
+			continue
+		}
+
+		// check for failed messages
+		if len(output.Failed) > 0 {
+			if retries > maxRetries {
+				log.Printf("DeleteMessages failed: %v -- max retries exceeded", err)
+				return fmt.Errorf("MAX_RETRIES_EXCEEDED")
+			}
+			retryIds := []string{}
+			retryHandles := []string{}
+			throttled := false
+			for _, msg := range output.Failed {
+				log.Printf("DeleteMessage err: %v", msg.ErrorCode)
+				if msg.ErrorCode == "RequestThrottled" {
+					retryIds = append(retryIds, msg.MessageID)
+					retryHandles = append(retryHandles, retryHandlesMap[msg.MessageID])
+					throttled = true
+				}
+			}
+
+			batchInput = gosqs.DeleteMessageBatchRequest{
+				QueueURL:       url,
+				MessageIDs:     retryIds,
+				ReceiptHandles: retryHandles,
 			}
 
 			time.Sleep(time.Duration(backoff) * time.Millisecond)
