@@ -1,9 +1,10 @@
 package dbops
 
 import (
+	"fmt"
 	"log"
 
-	"github.com/go-dynamo/dynamo"
+	"github.com/go-aws/go-dynamo/dynamo"
 	"github.com/tpillz-presents/service/store-api/store"
 )
 
@@ -60,6 +61,9 @@ const TransactionsPK = "user_id"
 
 // TransactionsSK contains the sort key name of the Transactions Table.
 const TransactionsSK = "transaction_id"
+
+// ErrConditionCheckFail contains the error code values for failed conditional writes.
+const ErrConditionalCheck = "ERR_CONDITIONAL_CHECK"
 
 // Table contains the necessary information to access the service's DynamoDB tables.
 // Primary & Sort key types are hardcoded as string format.
@@ -231,8 +235,9 @@ func PutOrder(DB *dynamo.DbInfo, user *store.Order) error {
 
 func UpdateOrderPaymentStatus(DB *dynamo.DbInfo, customerID, orderID, status string) error {
 	q := dynamo.CreateNewQueryObj(customerID, orderID)
+	expr := dynamo.NewExpression()
 	q.UpdateCurrent("payment_status", status)
-	err := dynamo.UpdateItem(DB.Svc, q, DB.Tables[OrdersTable])
+	err := dynamo.UpdateItem(DB.Svc, q, DB.Tables[OrdersTable], expr)
 	if err != nil {
 		log.Printf("UpdateOrderPaymentStatus failed: %v", err)
 		return err
@@ -243,7 +248,8 @@ func UpdateOrderPaymentStatus(DB *dynamo.DbInfo, customerID, orderID, status str
 func UpdateTxPaymentStatus(DB *dynamo.DbInfo, customerID, txID, status string) error {
 	q := dynamo.CreateNewQueryObj(customerID, txID)
 	q.UpdateCurrent("payment_status", status)
-	err := dynamo.UpdateItem(DB.Svc, q, DB.Tables[TransactionsTable])
+	expr := dynamo.NewExpression()
+	err := dynamo.UpdateItem(DB.Svc, q, DB.Tables[TransactionsTable], expr)
 	if err != nil {
 		log.Printf("UpdateOrderPaymentStatus failed: %v", err)
 		return err
@@ -254,7 +260,8 @@ func UpdateTxPaymentStatus(DB *dynamo.DbInfo, customerID, txID, status string) e
 func UpdateTxPaymentMethod(DB *dynamo.DbInfo, customerID, txID, method string) error {
 	q := dynamo.CreateNewQueryObj(customerID, txID)
 	q.UpdateCurrent("payment_method", method)
-	err := dynamo.UpdateItem(DB.Svc, q, DB.Tables[TransactionsTable])
+	expr := dynamo.NewExpression()
+	err := dynamo.UpdateItem(DB.Svc, q, DB.Tables[TransactionsTable], expr)
 	if err != nil {
 		log.Printf("UpdateOrderPaymentMethod failed: %v", err)
 		return err
@@ -265,9 +272,48 @@ func UpdateTxPaymentMethod(DB *dynamo.DbInfo, customerID, txID, method string) e
 func UpdateTxPaymentID(DB *dynamo.DbInfo, customerID, txID, paymentID string) error {
 	q := dynamo.CreateNewQueryObj(customerID, txID)
 	q.UpdateCurrent("payment_tx_id", paymentID)
-	err := dynamo.UpdateItem(DB.Svc, q, DB.Tables[TransactionsTable])
+	expr := dynamo.NewExpression()
+	err := dynamo.UpdateItem(DB.Svc, q, DB.Tables[TransactionsTable], expr)
 	if err != nil {
 		log.Printf("UpdateOrderPaymentID failed: %v", err)
+		return err
+	}
+	return nil
+}
+
+// UpdateInventoryCount updates a Store Item's inventory count by size and decrements the value for
+// the given sizeKey by the count integer. The update succeeds on the condition that the quantity
+// of the given size is greater than or equal to the count variable.
+func UpdateInventoryCount(DB *dynamo.DbInfo, subcat, itemID, sizeKey string, count int) error {
+	field := "units_available"
+	keyName := fmt.Sprintf("%s.%s", field, sizeKey)
+
+	// create and set update query
+	q := dynamo.CreateNewQueryObj(subcat, itemID)
+	q.UpdateCurrent(field, count)
+
+	// build expression
+	cond := dynamo.NewCondition()
+	cond.GreaterThanEqual(keyName, count)
+
+	update := dynamo.NewUpdateExpr()
+	update.SetMinus(keyName, keyName, count, true)
+
+	eb := dynamo.NewExprBuilder()
+	eb.SetCondition(cond)
+	eb.SetUpdate(update)
+	expression, err := eb.BuildExpresssion()
+	if err != nil {
+		if err.Error() == dynamo.ErrConditionalCheck {
+			return fmt.Errorf(ErrConditionalCheck)
+		}
+		log.Printf("UpdateInventoryCount failed: %v", err)
+		return err
+	}
+
+	err = dynamo.UpdateItem(DB.Svc, q, DB.Tables[StoreItemsTable], expression)
+	if err != nil {
+		log.Printf("UpdateInventoryCount failed: %v", err)
 		return err
 	}
 	return nil
