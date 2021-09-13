@@ -47,6 +47,13 @@ type customerInfo struct {
 	ShippingCost   float32 `json:"shipping_cost"`
 }
 
+type orderSummary struct {
+	Message    string            `json:"message"`
+	Items      []*store.CartItem `json:"items"`
+	TotalItems int               `json:"total_items"`
+	Subtotal   float32           `json:"subtotal"`
+}
+
 // list of tables function makes r/w calls to
 var tables = []dbops.Table{
 	dbops.Table{ // users table
@@ -76,6 +83,8 @@ var DB = dbops.InitDB(tables)
 
 // RootHandler handles HTTP request to the root '/'
 func RootHandler(w http.ResponseWriter, r *http.Request) {
+
+	// NOTE: return order summary first; get shipping info next
 	// verify content-type
 	contentType := r.Header.Get("Content-Type")
 	if contentType != "application/json" {
@@ -116,7 +125,7 @@ func RootHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// create order
-	order := createOrder(data, cust, cart)
+	order := createOrder(cust, cart)
 
 	// put order
 	err = dbops.PutOrder(DB, order)
@@ -127,6 +136,7 @@ func RootHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// update customer record
+	// TO DO: update fields only with expression
 	err = dbops.PutCustomer(DB, cust)
 	if err != nil {
 		log.Printf("RootHandler failed: %v", err)
@@ -134,32 +144,30 @@ func RootHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httpops.ErrResponse(w, "Successfully retreived site info: ", successMsg, http.StatusOK)
+	summary := orderSummary{Message: successMsg, Items: order.Items, TotalItems: order.TotalItems, Subtotal: order.SalesSubtotal}
+
+	httpops.ErrResponse(w, "Successfully retreived site info: ", summary, http.StatusOK)
 	return
 }
 
-func createOrder(info customerInfo, cust *store.Customer, cart *store.ShoppingCart) *store.Order {
+func createOrder(cust *store.Customer, cart *store.ShoppingCart) *store.Order {
 	// crate order & set intitial fields
 	order := &store.Order{}
-	if cust.OpenOrder {
-		order.OrderID = cust.OpenOrderID // overwrite existing open order with updated order info
-	} else {
-		order.OrderID = generateOrderID(cust.UserID, cust.Orders)
-	}
+	order.OrderID = generateOrderID(cust.UserID, cust.Orders)
 	order.UserID = cust.UserID
 
 	for _, item := range cart.Items {
 		order.Items = append(order.Items, item)
 	}
 	order.SalesSubtotal = round(cart.Subtotal)
-	order.ShippingCost = round(info.ShippingCost)
+	// order.ShippingCost = round(info.ShippingCost)
 	order.SalesTax = round(order.SalesSubtotal * CASalesTaxRate)
 	order.ChargesAndFees = round(FeesTotal)
 	order.OrderTotal = order.SalesSubtotal + order.ShippingCost + order.SalesTax + order.ChargesAndFees
 	order.TotalItems = cart.TotalItems
 
-	addr := createAddress(info)
-	order.ShippingAddress = addr
+	// addr := createAddress(info)
+	// order.ShippingAddress = addr
 
 	order.OrderWeightOzs = cart.CartWeightOzs
 	order.OrderWeightLbs = cart.CartWeightLbs
@@ -176,10 +184,10 @@ func createOrder(info customerInfo, cust *store.Customer, cart *store.ShoppingCa
 
 	// update customer object
 	if !cust.OpenOrder {
-		cust.Orders += 1
 		cust.OpenOrder = true
-		cust.OpenOrderID = order.OrderID
 	}
+	cust.Orders += 1
+	cust.OpenOrderIDs = append(cust.OpenOrderIDs, order.OrderID)
 
 	return order
 }

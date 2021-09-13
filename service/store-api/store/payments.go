@@ -15,6 +15,8 @@ const RefundStatusSuccess = "REFUND_SUCCESS"
 // RefundStatusFail contains the status code for failed refunds.
 const RefundStatusFail = "REFUND_FAIL"
 
+const PaymentDisputed = "DISPUTED"
+
 // ValidPaymentStatus contains the valid values for Stripe transaction statuses.
 var ValidPaymentStatus = map[string]bool{
 	PaymentStatusFail:       true,

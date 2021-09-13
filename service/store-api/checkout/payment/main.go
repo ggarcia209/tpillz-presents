@@ -37,21 +37,22 @@ type customerInfo struct {
 }
 
 type billingInfo struct {
-	UserID        string `json:"user_id"`
-	UserEmail     string `json:"user_email"`
-	FirstName     string `json:"first_name"`
-	LastName      string `json:"last_name"`
-	Company       string `json:"company"`
-	AddressLine1  string `json:"address_line_1"`
-	AddressLine2  string `json:"address_line_2"`
-	City          string `json:"city"`
-	State         string `json:"state"`
-	Country       string `json:"country"`
-	Zip           string `json:"zip"`
-	PhoneNumber   string `json:"phone_number"`
-	PaymentMethod string `json:"payment_method"`
-	PaymentToken  string `json:"payment_token"` // token used to authorize payment
-	SaveInfo      bool   `json:"save_info"`
+	UserID         string `json:"user_id"`
+	UserEmail      string `json:"user_email"`
+	SameAsShipping bool   `json:"same_as_shipping"`
+	FirstName      string `json:"first_name"`
+	LastName       string `json:"last_name"`
+	Company        string `json:"company"`
+	AddressLine1   string `json:"address_line_1"`
+	AddressLine2   string `json:"address_line_2"`
+	City           string `json:"city"`
+	State          string `json:"state"`
+	Country        string `json:"country"`
+	Zip            string `json:"zip"`
+	PhoneNumber    string `json:"phone_number"`
+	PaymentMethod  string `json:"payment_method"`
+	PaymentToken   string `json:"payment_token"` // token used to authorize payment
+	SaveInfo       bool   `json:"save_info"`
 }
 
 // list of tables function makes r/w calls to
@@ -138,6 +139,7 @@ func RootHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// return error if expired
 	ttl := time.Since(init)
 	if int(ttl.Milliseconds()) > order.TtlMs {
 		log.Printf("Order expired - payment not processed.")
@@ -146,14 +148,7 @@ func RootHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// create transaction object
-	tx := &store.Transaction{
-		TransactionID: "",
-		UserID:        cust.UserID,
-		OrderID:       order.OrderID,
-		Timestamp:     timeops.ConvertToTimestampString(time.Now()),
-		TotalAmount:   0.0,
-	}
-	tx.SetHashID()
+	tx := createTx(cust.UserID, order)
 
 	// update order
 	updateOrder(data, cust, tx, order)
@@ -181,10 +176,90 @@ func RootHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("staging message sent: %v", msgID)
 
+	// verify item in stock
+	out := []string{}
+	rollback := []*store.CartItem{}
+	stockOk := true
+	for _, item := range order.Items {
+		_, err := dbops.UpdateInventoryCount(DB, item.Subcategory, item.ItemID, item.Size, item.Quantity)
+		if err != nil {
+			if err.Error() == dbops.ErrConditionalCheck {
+				stockOk = false
+				out = append(out, item.Name)
+				log.Printf("RootHandler: item %s out of stock", item.ItemID)
+			}
+			log.Printf("RootHandler failed: %v", err)
+			httpops.ErrResponse(w, "Internal Server Error: "+err.Error(), failMsg, http.StatusInternalServerError)
+			break
+		}
+		rollback = append(rollback, item)
+	}
+	if !stockOk {
+		// send rollback message
+		update := queueops.InventoryUpdate{
+			UserEmail: order.UserID,
+			OrderID:   order.OrderID,
+			Items:     rollback,
+		}
+		url, err := queueops.GetQueueURL(sqs, queueops.InventoryUpdateFifoQueue)
+		if err != nil {
+			log.Printf("RootHandler failed: %v", err)
+			msg := "Request failed! Order not processed."
+			httpops.ErrResponse(w, "Internal Server Error: "+err.Error(), msg, http.StatusInternalServerError)
+			return
+		}
+		msgId, err := queueops.SendInventoryUpdateMessage(sqs, url, update)
+		if err != nil {
+			msg := "Request failed! Order not processed."
+			httpops.ErrResponse(w, "Internal Server Error: "+err.Error(), msg, http.StatusInternalServerError)
+			return
+		}
+		log.Printf("rollback msgId: %s", msgId)
+		// return to user
+		httpops.ErrResponse(w, "ITEM_OUT_OF_STOCK", out, http.StatusOK)
+		return
+	}
+
 	// process payment
 	// IN PROGRESS
+	paymentOk := true
+	// rollback db updates if payment fails
+	if !paymentOk {
+		// send rollback message
+		update := queueops.InventoryUpdate{
+			UserEmail: order.UserID,
+			OrderID:   order.OrderID,
+			Items:     order.Items,
+		}
+		url, err := queueops.GetQueueURL(sqs, queueops.InventoryUpdateFifoQueue)
+		if err != nil {
+			log.Printf("RootHandler failed: %v", err)
+			msg := "Request failed! Order not processed."
+			httpops.ErrResponse(w, "Internal Server Error: "+err.Error(), msg, http.StatusInternalServerError)
+			return
+		}
+		msgId, err := queueops.SendInventoryUpdateMessage(sqs, url, update)
+		if err != nil {
+			msg := "Request failed! Order not processed."
+			httpops.ErrResponse(w, "Internal Server Error: "+err.Error(), msg, http.StatusInternalServerError)
+			return
+		}
+		log.Printf("rollback msgId: %s", msgId)
+		/* for _, item := range order.Items {
+			neg := item.Quantity * -1
+			err := dbops.UpdateInventoryCount(DB, item.Subcategory, item.ItemID, item.Size, neg)
+			if err != nil {
+				if err.Error() == dbops.ErrConditionalCheck {
+					log.Printf("RootHandler failed: item %s out of stock", item.ItemID)
+					msg := fmt.Sprintf("ITEM_OUT_OF_STOCK-%s", item.ItemID
+				}
+				log.Printf("RootHandler failed: %v", err)
+				httpops.ErrResponse(w, "Internal Server Error: "+err.Error(), failMsg, http.StatusInternalServerError)
+			}
+		} */
+	}
 
-	// update transaction object with payment info
+	// update transaction object with payment info on payment completion
 	// IN PROGRESS
 	updateTx(tx, order)
 
@@ -217,26 +292,48 @@ func generateOrderID(userID string, orderCt int) string {
 	return orderID
 }
 
+func createTx(custID string, order *store.Order) *store.Transaction {
+	tx := &store.Transaction{
+		TransactionID:  "",
+		UserID:         custID,
+		OrderID:        order.OrderID,
+		Timestamp:      timeops.ConvertToTimestampString(time.Now()),
+		SalesSubtotal:  order.SalesSubtotal,
+		SalesTax:       order.SalesTax,
+		ShippingCost:   order.ShippingCost,
+		ChargesAndFees: order.ChargesAndFees,
+		TotalAmount:    order.OrderTotal,
+		PaymentStatus:  store.PaymentStatusInProgress,
+	}
+	tx.SetHashID()
+	return tx
+}
+
 func updateOrder(info billingInfo, cust *store.Customer, tx *store.Transaction, order *store.Order) {
-	order.Paid = true
-	order.OrderStatus = store.OrderStatusPaid
+	// order.Paid = true
+	order.OrderStatus = store.OrderStatusPaymentInProgress
 
 	order.TransactionID = tx.TransactionID
 	order.TxTimestamp = tx.Timestamp
 
-	address := store.Address{
-		FirstName:    info.FirstName,
-		LastName:     info.LastName,
-		Company:      info.Company,
-		AddressLine1: info.AddressLine1,
-		AddressLine2: info.AddressLine2,
-		City:         info.City,
-		State:        info.State,
-		Country:      info.Country,
-		Zip:          info.Zip,
-		PhoneNumber:  info.PhoneNumber,
+	// set shipping address
+	if info.SameAsShipping {
+		order.BillingAddress = order.ShippingAddress
+	} else {
+		address := store.Address{
+			FirstName:    info.FirstName,
+			LastName:     info.LastName,
+			Company:      info.Company,
+			AddressLine1: info.AddressLine1,
+			AddressLine2: info.AddressLine2,
+			City:         info.City,
+			State:        info.State,
+			Country:      info.Country,
+			Zip:          info.Zip,
+			PhoneNumber:  info.PhoneNumber,
+		}
+		order.BillingAddress = address
 	}
-	order.BillingAddress = address
 
 	// update customer info
 	if info.SaveInfo {
@@ -244,8 +341,9 @@ func updateOrder(info billingInfo, cust *store.Customer, tx *store.Transaction, 
 		cust.BillingAddress = order.BillingAddress
 	}
 	cust.Purchases += order.TotalItems
-	cust.TotalSpent += tx.TotalAmount
-	cust.OpenOrder = false
+	// update following after payment confirmed
+	// cust.TotalSpent += tx.TotalAmount
+	// cust.OpenOrder = false
 }
 
 func createReceipt(cust *store.Customer, order *store.Order) store.Receipt {
@@ -281,15 +379,10 @@ func createPaymentStatus(cust *store.Customer, order *store.Order, tx *store.Tra
 }
 
 func updateTx(tx *store.Transaction, order *store.Order) {
-	tx.SalesSubtotal = order.SalesSubtotal
-	tx.SalesTax = order.SalesTax
-	tx.ShippingCost = order.ShippingCost
-	tx.ChargesAndFees = order.ChargesAndFees
-	tx.TotalAmount = order.OrderTotal
-	// tx.PaymentMethod
-	// tx.PaymentTxID
+	tx.PaymentMethod = "TEST"
+	tx.PaymentTxID = "TEST0001"
 	// payment tx timestamp?
-	tx.PaymentStatus = store.TxStatusComplete
+	tx.PaymentStatus = store.PaymentStatusSuccess
 }
 
 func main() {

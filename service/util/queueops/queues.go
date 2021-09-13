@@ -41,9 +41,9 @@ type Staging struct {
 
 // InventoryUpdate is used to update inventory counts when a new order is made.
 type InventoryUpdate struct {
-	UserEmail string `json:"user_email"`
-	OrderID   string `json:"order_id"`
-	Action    string `json:"action"`
+	UserEmail string            `json:"user_email"`
+	OrderID   string            `json:"order_id"`
+	Items     []*store.CartItem `json:"items"`
 }
 
 // return type for PollStagingQueue

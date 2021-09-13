@@ -3,9 +3,13 @@ package store
 import (
 	"crypto/md5"
 	"encoding/hex"
+	"log"
+	"strconv"
 )
 
 const OrderStatusOpen = "OPEN"
+
+const OrderStatusPaymentInProgress = "PAYMENT_IN_PROGRESS"
 
 const OrderStatusPaid = "PAID"
 
@@ -37,19 +41,67 @@ type ShoppingCart struct {
 // CartItem represents a StoreItem added to user's cart for purchase.
 // CartItems are not persisted outside of the ShoppingCart struct.
 type CartItem struct {
-	UserID         string  `json:"user_id"`
-	ItemID         string  `json:"item_id"`
-	SizeID         string  `json:"size_id"` // <itemID>-<size> (ex: '0001-xl')
-	Name           string  `json:"name"`
-	Size           string  `json:"size"`
-	Quantity       int     `json:"quantity"`
-	Price          float32 `json:"price"`
-	ItemSubtotal   float32 `json:"item_subtotal"` // quantity * price
-	UnitWeightOzs  float32 `json:"unit_weight_ozs"`
-	TotalWeightOzs float32 `json:"total_weight_ozs"` // quantity * unit weight
-	UnitWeightLbs  float32 `json:"unit_weight_lbs"`
-	TotalWeightLbs float32 `json:"total_weight"` // quantity * unit weight
-	ThumbnailID    string  `json:"thumbnail_id"`
+	UserID             string     `json:"user_id"`
+	ItemID             string     `json:"item_id"`
+	SizeID             string     `json:"size_id"` // <itemID>-<size> (ex: '0001-xl')
+	Name               string     `json:"name"`
+	Subcategory        string     `json:"sub_category"`
+	Size               string     `json:"size"`
+	Quantity           int        `json:"quantity"`
+	Price              float32    `json:"price"`
+	ItemSubtotal       float32    `json:"item_subtotal"`       // quantity * price
+	ProductDimensions  Dimensions `json:"product_dimensions"`  // unpackaged product measurements
+	ShippingDimensions Dimensions `json:"shipping_dimensions"` // packaged product measurements
+	TotalWeightOzs     float32    `json:"total_weight_ozs"`    // quantity * unit weight
+	TotalWeightLbs     float32    `json:"total_weight"`        // quantity * unit weight
+	ThumbnailID        string     `json:"thumbnail_id"`
+}
+
+// Dimensions represents the dimensions of a CartItem or Parcel
+type Dimensions struct {
+	Length       string  `json:"length"`
+	Width        string  `json:"width"`
+	Height       string  `json:"height"`
+	DistanceUnit string  `json:"distance_unit"`
+	Weight       string  `json:"weight"`
+	MassUnit     string  `json:"mass_unit"`
+	Volume       float32 `json:"volume"`
+	VolumeUnit   string  `json:"volume_unit"`
+}
+
+// GetStrings returns the Lenght, Width, Height, and Weight values as float32 values with an error value.
+// Float values are returned as a float slice -- indexes: {Lenght: 0, Width: 1, Height: 2, Weight: 3}.
+func (d *Dimensions) GetFloats() ([]float32, error) {
+	floats := []float32{}
+	l, err := strconv.ParseFloat(d.Length, 32)
+	if err != nil {
+		log.Printf("d.GetStrings failed: %v", err)
+		return []float32{}, err
+	}
+	floats = append(floats, float32(l))
+
+	w, err := strconv.ParseFloat(d.Width, 32)
+	if err != nil {
+		log.Printf("d.GetStrings failed: %v", err)
+		return []float32{}, err
+	}
+	floats = append(floats, float32(w))
+
+	h, err := strconv.ParseFloat(d.Height, 32)
+	if err != nil {
+		log.Printf("d.GetStrings failed: %v", err)
+		return []float32{}, err
+	}
+	floats = append(floats, float32(h))
+
+	wt, err := strconv.ParseFloat(d.Weight, 32)
+	if err != nil {
+		log.Printf("d.GetStrings failed: %v", err)
+		return []float32{}, err
+	}
+	floats = append(floats, float32(wt))
+
+	return floats, nil
 }
 
 // StoreItem represents an item available for purchase in the online store.
@@ -58,7 +110,7 @@ type StoreItem struct {
 	Name           string         `json:"name"`
 	Description    string         `json:"description"`
 	Category       string         `json:"category"`
-	Subcategory    string         `json:"subcategory"`
+	Subcategory    string         `json:"sub_category"`
 	Price          float32        `json:"price"`
 	UnitsSold      int            `json:"units_sold"`
 	UnitsAvailable map[string]int `json:"units_available"` // size: units
@@ -109,37 +161,38 @@ func (t *Transaction) SetHashID() {
 
 // Order represents a customer order for a store item.
 type Order struct {
-	OrderID          string      `json:"order_id"`
-	TransactionID    string      `json:"transaction_id"`
-	StripeChargeID   string      `json:"stripe_charge_id"`
-	UserID           string      `json:"user_id"`
-	Complete         bool        `json:"status"`    // denotes whether order is complete after creation at initial checkout page
-	Expired          bool        `json:"expired"`   // denotes whether order is expired (checkout timeout / cart updated)
-	TtlMs            int         `json:"ttl_ms"`    // time to live in ms
-	InitTime         string      `json:"init_time"` // timestamp when order is created - format to/from time.Time obj
-	Items            []*CartItem `json:"items"`
-	TotalItems       int         `json:"total_items"` // sum of quantities of all items in cart
-	SalesSubtotal    float32     `json:"sales_subtotal"`
-	ShippingCost     float32     `json:"shipping_cost"`
-	SalesTax         float32     `json:"sales_tax"`
-	ChargesAndFees   float32     `json:"charges_and_fees"` // stripe processing, other fees
-	OrderTotal       float32     `json:"order_total"`
-	OrderDate        string      `json:"order_date"`
-	TxTimestamp      string      `json:"transaction_timestamp"`
-	PaymentStatus    string      `json:"payment_status"`
-	Paid             bool        `json:"paid"`
-	BillingAddress   Address     `json:"billing_address"`  // Address, City, State, ZIP
-	ShippingAddress  Address     `json:"shipping_address"` // Address, City, State, ZIP
-	OrderWeightOzs   float32     `json:"order_weight_ozs"`
-	OrderWeightLbs   float32     `json:"order_weight_lbs"`
-	OrderWeightKgs   float32     `json:"order_weight_kg"`
-	Shipped          bool        `json:"shipped"`
-	ShippingCarriers []string    `json:"shipping_carrier"` // []string array types for large, multi-part, and international orders
-	ShippingMethods  []string    `json:"shipping_method"`
-	ShipDates        []string    `json:"ship_date"`
-	TrackingNumbers  []string    `json:"tracking_number"`
-	Delivered        bool        `json:"delivered"`
-	OrderStatus      string      `json:"order_status"`
+	OrderID         string      `json:"order_id"`
+	TransactionID   string      `json:"transaction_id"`
+	StripeChargeID  string      `json:"stripe_charge_id"`
+	UserID          string      `json:"user_id"`
+	UserEmail       string      `json:"user_email"`
+	Complete        bool        `json:"status"`    // denotes whether order is complete after creation at initial checkout page
+	Expired         bool        `json:"expired"`   // denotes whether order is expired (checkout timeout / cart updated)
+	TtlMs           int         `json:"ttl_ms"`    // time to live in ms
+	InitTime        string      `json:"init_time"` // timestamp when order is created - format to/from time.Time obj
+	Items           []*CartItem `json:"items"`
+	TotalItems      int         `json:"total_items"` // sum of quantities of all items in cart
+	SalesSubtotal   float32     `json:"sales_subtotal"`
+	ShippingCost    float32     `json:"shipping_cost"`
+	SalesTax        float32     `json:"sales_tax"`
+	ChargesAndFees  float32     `json:"charges_and_fees"` // stripe processing, other fees
+	OrderTotal      float32     `json:"order_total"`
+	OrderDate       string      `json:"order_date"`
+	TxTimestamp     string      `json:"transaction_timestamp"`
+	PaymentStatus   string      `json:"payment_status"`
+	Paid            bool        `json:"paid"`
+	BillingAddress  Address     `json:"billing_address"`  // Address, City, State, ZIP
+	ShippingAddress Address     `json:"shipping_address"` // Address, City, State, ZIP
+	OrderWeightOzs  float32     `json:"order_weight_ozs"`
+	OrderWeightLbs  float32     `json:"order_weight_lbs"`
+	OrderWeightKgs  float32     `json:"order_weight_kg"`
+	Shipped         bool        `json:"shipped"`
+	ShippingRate    RateSummary `json:"shipping_rate"`
+	Shipment        Shipment    `json:"shipment"`
+	ShipDates       []string    `json:"ship_date"`
+	TrackingNumbers []string    `json:"tracking_number"`
+	Delivered       bool        `json:"delivered"`
+	OrderStatus     string      `json:"order_status"`
 }
 
 // Receipt represents a receipt sent to customers after placing orders.
@@ -160,19 +213,21 @@ type Receipt struct {
 
 // New sets the values of a Receipt object with the given
 // data from the *Customer and *Order objects.
-func (r *Receipt) New(cust *Customer, order *Order) {
-	r.UserID = cust.UserID
-	r.OrderID = order.OrderID
-	r.TransactionID = order.TransactionID
-	r.UserEmail = cust.Email
-	r.OrderSummary = order.Items
-	r.SalesSubtotal = order.SalesSubtotal
-	r.ShippingCost = order.ShippingCost
-	r.SalesTax = order.SalesTax
-	r.ChargesAndFees = order.ChargesAndFees
-	r.OrderTotal = order.OrderTotal
-	r.BillingAddress = order.BillingAddress
-	r.ShippingAddress = order.ShippingAddress
+func (o *Order) NewReceipt() *Receipt {
+	r := &Receipt{}
+	r.UserID = o.UserID
+	r.OrderID = o.OrderID
+	r.TransactionID = o.TransactionID
+	r.UserEmail = o.UserEmail
+	r.OrderSummary = o.Items
+	r.SalesSubtotal = o.SalesSubtotal
+	r.ShippingCost = o.ShippingCost
+	r.SalesTax = o.SalesTax
+	r.ChargesAndFees = o.ChargesAndFees
+	r.OrderTotal = o.OrderTotal
+	r.BillingAddress = o.BillingAddress
+	r.ShippingAddress = o.ShippingAddress
+	return r
 }
 
 // Return represents a customer return request
@@ -193,23 +248,23 @@ type Return struct {
 
 // Customer represents a user of the service.
 type Customer struct {
-	UserID          string  `json:"user_id"`
-	Username        string  `json:"username"`
-	Email           string  `json:"email"`
-	FirstName       string  `json:"first_name"`
-	LastName        string  `json:"last_name"`
-	BillingAddress  Address `json:"billing_address"`
-	ShippingAddress Address `json:"shipping_address"`
-	City            string  `json:"city"`
-	Country         string  `json:"country"`
-	Purchases       int     `json:"purchases"`     // total number of purchases
-	Returns         int     `json:"returns"`       // total number of returns
-	Disputes        int     `json:"disputes"`      // total number of disputes
-	TotalSpent      float32 `json:"total_spent"`   // total USD spent
-	Orders          int     `json:"orders"`        // total number of orders created
-	OpenOrder       bool    `json:"open_order"`    // denotes if customer has order in progress
-	OpenOrderID     string  `json:"open_order_id"` // ID of open order
-	JoinDate        string  `json:"join_date"`
+	UserID          string   `json:"user_id"`
+	Username        string   `json:"username"`
+	Email           string   `json:"email"`
+	FirstName       string   `json:"first_name"`
+	LastName        string   `json:"last_name"`
+	BillingAddress  Address  `json:"billing_address"`
+	ShippingAddress Address  `json:"shipping_address"`
+	City            string   `json:"city"`
+	Country         string   `json:"country"`
+	Purchases       int      `json:"purchases"`     // total number of purchases
+	Returns         int      `json:"returns"`       // total number of returns
+	Disputes        int      `json:"disputes"`      // total number of disputes
+	TotalSpent      float32  `json:"total_spent"`   // total USD spent
+	Orders          int      `json:"orders"`        // total number of orders created
+	OpenOrder       bool     `json:"open_order"`    // denotes if customer has order in progress
+	OpenOrderIDs    []string `json:"open_order_id"` // IDs of open orders
+	JoinDate        string   `json:"join_date"`
 }
 
 // Address represents a mailling or billing address.
@@ -224,25 +279,17 @@ type Address struct {
 	Country      string `json:"country"`
 	Zip          string `json:"zip"`
 	PhoneNumber  string `json:"phone_number"`
+	Email        string `json:"email"`
 }
 
-// TxStatusFail contains the status value for failed Transactions.
-const TxStatusFail = "FAILED"
-
-// TxStatusComplete contains the status value for successful Transactions.
-const TxStatusComplete = "SUCCESS"
-
-// TxStatusDispute containst the status value for disputed Transactions
-const TxStatusDispute = "DISPUTED"
-
-// TxStatusRefund contains the status value for refunded Transactions
-const TxStatusRefund = "REFUNDED"
-
-// temporary cache - pull from DynamoDB in prod
-/* var shoppingCarts = make(map[string]ShoppingCart)
-
-func AddToCart(item CartItem, cart *ShoppingCart) {
-	cart.Items = append(cart.Items, item)
-	cart.TotalItems += item.Quantity
-	cart.Subtotal += item.ItemSubtotal
-} */
+// ReturnAddress contains the business's return address for shipping operations.
+var ReturnAddress = Address{
+	Company:      "ACamoPRJCT",
+	AddressLine1: "3204 Caraway Court",
+	City:         "Modesto",
+	State:        "CA",
+	Country:      "United States",
+	Zip:          "95355",
+	PhoneNumber:  "209-495-5130",
+	Email:        "sgarza1209@gmail.com",
+}

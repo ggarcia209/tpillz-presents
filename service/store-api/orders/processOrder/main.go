@@ -79,7 +79,7 @@ func RootHandler(w http.ResponseWriter, r *http.Request) {
 		custID := status.CustomerID
 		check := store.ValidPaymentStatus[status.TxStatus]
 		if !check {
-			log.Printf("processOrder failed: INVALID__TX_STATUS")
+			log.Printf("processOrder failed: INVALID_TX_STATUS")
 			httpops.ErrResponse(w, "Internal server error: ", "INVALID_TX_STATUS: "+status.TxStatus, http.StatusInternalServerError)
 			return
 		}

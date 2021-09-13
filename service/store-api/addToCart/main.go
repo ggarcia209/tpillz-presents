@@ -7,9 +7,9 @@ import (
 	"net/http"
 
 	"github.com/apex/gateway"
-	"github.com/tpillz-presents/service/dbops"
-	"github.com/tpillz-presents/service/httpops"
 	"github.com/tpillz-presents/service/store-api/store"
+	"github.com/tpillz-presents/service/util/dbops"
+	"github.com/tpillz-presents/service/util/httpops"
 )
 
 const route = "/add-to-cart" // PUT
@@ -20,8 +20,8 @@ const successMsg = "Request succeeded!"
 // list of tables function makes r/w calls to
 var tables = []dbops.Table{
 	dbops.Table{ // users table
-		Name:       dbops.UsersTable,
-		PrimaryKey: dbops.UsersPK,
+		Name:       dbops.CustomersTable,
+		PrimaryKey: dbops.CustomersPK,
 		SortKey:    ""},
 	dbops.Table{ // store items table
 		Name:       dbops.StoreItemsTable,
@@ -82,8 +82,10 @@ func RootHandler(w http.ResponseWriter, r *http.Request) {
 	} else {
 		item := cart.Items[data.SizeID]
 		item.Quantity += data.Quantity
-		item.ItemSubtotal += data.ItemSubtotal
+		item.ItemSubtotal += (data.Price * float32(data.Quantity))
 	}
+	cart.TotalItems += data.Quantity
+	cart.Subtotal += (float32(data.Quantity) * data.Price)
 
 	// update cart db record
 	err = dbops.PutShoppingCart(DB, cart)
