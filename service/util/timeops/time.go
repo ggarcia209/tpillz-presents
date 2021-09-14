@@ -26,6 +26,34 @@ func ConvertToTimestampString(t time.Time) string {
 	return fmt
 }
 
+// ConvertToTimestampStringHour converts a time.Time value to
+// mm/dd/yyyy hh:00 am/pm format (ex: 01/18/2022 1:00 PM).
+func ConvertToTimestampStringHour(t time.Time) string {
+	y, m, d := t.Date()
+	hr := t.Hour()
+	ampm := "AM"
+	if hr == 0 {
+		hr = 12
+		ampm = "PM"
+	}
+	if hr > 12 {
+		hr -= 12
+		ampm = "PM"
+	}
+	vals := []int{int(m), d, y, hr}
+	strs := []string{}
+	for _, val := range vals {
+		str := strconv.Itoa(val)
+		if val < 10 {
+			// add leading zero
+			str = "0" + str
+		}
+		strs = append(strs, str)
+	}
+	fmt := fmt.Sprintf("%s-%s-%s %s:00 %s", strs[0], strs[1], strs[2], strs[3], ampm)
+	return fmt
+}
+
 // ConvertStringToTimestamp converts timestamp string in 'MM-DD-YYYY HH:MM:SS' format
 // to a time.Time object
 func ConvertStringToTimestamp(s string) (time.Time, error) {

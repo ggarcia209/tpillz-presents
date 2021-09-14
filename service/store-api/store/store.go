@@ -181,16 +181,9 @@ type Order struct {
 	TxTimestamp     string      `json:"transaction_timestamp"`
 	PaymentStatus   string      `json:"payment_status"`
 	Paid            bool        `json:"paid"`
-	BillingAddress  Address     `json:"billing_address"`  // Address, City, State, ZIP
-	ShippingAddress Address     `json:"shipping_address"` // Address, City, State, ZIP
-	OrderWeightOzs  float32     `json:"order_weight_ozs"`
-	OrderWeightLbs  float32     `json:"order_weight_lbs"`
-	OrderWeightKgs  float32     `json:"order_weight_kg"`
+	BillingAddress  Address     `json:"billing_address"`
+	ShippingAddress Address     `json:"shipping_address"`
 	Shipped         bool        `json:"shipped"`
-	ShippingRate    RateSummary `json:"shipping_rate"`
-	Shipment        Shipment    `json:"shipment"`
-	ShipDates       []string    `json:"ship_date"`
-	TrackingNumbers []string    `json:"tracking_number"`
 	Delivered       bool        `json:"delivered"`
 	OrderStatus     string      `json:"order_status"`
 }
@@ -211,8 +204,17 @@ type Receipt struct {
 	ShippingAddress Address     `json:"shipping_address"` // Address, City, State, ZIP
 }
 
-// New sets the values of a Receipt object with the given
-// data from the *Customer and *Order objects.
+// OrderSummary is used to get summary information used during order fulfillment.
+type OrderSummary struct {
+	UserEmail  string  `json:"user_email"`
+	UserID     string  `json:"user_id"`
+	OrderID    string  `json:"order_id"`
+	OrderDate  string  `json:"order_date"`
+	OrderTotal float32 `json:"order_total"`
+	TotalItems int     `json:"total_items"`
+}
+
+// NewReceipt creates a new *Receipt object from the Order.
 func (o *Order) NewReceipt() *Receipt {
 	r := &Receipt{}
 	r.UserID = o.UserID
@@ -228,6 +230,19 @@ func (o *Order) NewReceipt() *Receipt {
 	r.BillingAddress = o.BillingAddress
 	r.ShippingAddress = o.ShippingAddress
 	return r
+}
+
+// NewSummary creates a new *OrderSummary object from the Order.
+func (o *Order) NewSummary() *OrderSummary {
+	os := &OrderSummary{
+		UserID:     o.UserID,
+		OrderID:    o.OrderID,
+		UserEmail:  o.UserEmail,
+		OrderDate:  o.OrderDate,
+		OrderTotal: o.OrderTotal,
+		TotalItems: o.TotalItems,
+	}
+	return os
 }
 
 // Return represents a customer return request

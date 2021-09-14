@@ -1,8 +1,8 @@
 package main
 
-/* sendEmail is triggered when an Order message is published to the Fulfillment topic.
-   This function emails a receipt containing summary info of the order to the customer,
-   and emails a corresponding message to an admin-facing email address. */
+/* queueOrder is triggered by an SNS event when a new Order message is published to
+the Fulfillment topic. This function writes the new order to the OpenOrders DB table
+and sends a summary of the order to the Fulfillment queue. */
 
 import (
 	"context"
@@ -11,9 +11,9 @@ import (
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
-	"github.com/go-aws/go-ses/goses"
 	"github.com/tpillz-presents/service/store-api/store"
-	"github.com/tpillz-presents/service/util/sesops"
+	"github.com/tpillz-presents/service/util/dbops"
+	"github.com/tpillz-presents/service/util/queueops"
 )
 
 // UPDATE
@@ -22,11 +22,19 @@ const route = "/fulfillment/email" // PUT
 const failMsg = "Request failed!"
 const successMsg = "Request succeeded!"
 
-const from = "dg.dev.test510@gmail.com"                   // test only - move to admin settings db table in prod
-const notificationAddress = "danielgarcia95367@gmail.com" // test only - move to admin settings db table in prod
+// list of tables function makes r/w calls to
+var tables = []dbops.Table{
+	dbops.Table{ // orders table
+		Name:       dbops.OpenOrdersTable,
+		PrimaryKey: dbops.OpenOrdersPK,
+		SortKey:    dbops.OpenOrdersSK,
+	},
+}
 
 func handler(ctx context.Context, snsEvent events.SNSEvent) {
-	svc := goses.InitSesh()
+	svc := queueops.InitSesh() // sqs
+	db := dbops.InitDB(tables) // dynamodb
+
 	for _, record := range snsEvent.Records {
 		snsRecord := record.SNS
 		// fmt.Printf("[%s %s] Message = %s \n", record.EventSource, snsRecord.Timestamp, snsRecord.Message)
@@ -41,16 +49,23 @@ func handler(ctx context.Context, snsEvent events.SNSEvent) {
 			return
 		}
 
-		// send email receipt to customer
-		err = sesops.SendCustomerReceipt(svc, from, order)
+		// write order to open orders table
+		err = dbops.PutOpenOrder(db, order)
 		if err != nil {
 			// handle err
 			log.Printf("handler failed: %v", err)
 			return
 		}
 
-		// email receipt to admin
-		err = sesops.SendOrderNotification(svc, from, notificationAddress, order)
+		// send order to fulfillment queue
+		os := order.NewSummary()
+		url, err := queueops.GetQueueURL(svc, queueops.FulfillmentFifoQueue)
+		if err != nil {
+			// handle err
+			log.Printf("handler failed: %v", err)
+			return
+		}
+		_, err = queueops.SendFulfillmentMessage(svc, url, os)
 		if err != nil {
 			// handle err
 			log.Printf("handler failed: %v", err)

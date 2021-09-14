@@ -51,3 +51,37 @@ func PublishOrderNotification(svc interface{}, order *store.Order, fulfillmentTo
 		return msgID, nil
 	}
 }
+
+// PublishShipmentUpdate publishes a *store.Shipment object to the Shipment topic. Topic subscribers update
+// the Shipment object in the database and notify the customer of the shipment.
+func PublishShipmentUpdate(svc interface{}, order *store.Shipment, shipmentTopicArn string) (string, error) {
+	js, err := json.Marshal(order)
+	if err != nil {
+		log.Printf("PublishShipmentUpdate failed: %v", err)
+		return "", err
+	}
+	msgStr := string(js)
+
+	// poll for messages with exponential backoff for errors & empty responses
+	retries := 0
+	maxRetries := 4
+	backoff := 1000.0
+	for {
+		// receive messages from queue
+		msgID, err := gosns.Publish(svc, msgStr, shipmentTopicArn)
+		if err != nil {
+			// retry with backoff if error
+			if retries > maxRetries {
+				log.Printf("PublishShipmentUpdate failed: %v -- max retries exceeded", err)
+				return "", err
+			}
+			log.Printf("PublishShipmentUpdate failed: %v -- retrying...", err)
+			time.Sleep(time.Duration(backoff) * time.Millisecond)
+			backoff = backoff * 2
+			retries++
+			continue
+		}
+
+		return msgID, nil
+	}
+}

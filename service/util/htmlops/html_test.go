@@ -6,7 +6,7 @@ import (
 	"github.com/tpillz-presents/service/util/s3ops"
 )
 
-func TestCreateOrderReceiptHtml(t *testing.T) {
+func TestCreateHtmlTemplate(t *testing.T) {
 	var tests = []ReceiptTemplateData{
 		ReceiptTemplateData{
 			OrderID:    "0000001",
@@ -35,7 +35,7 @@ func TestCreateOrderReceiptHtml(t *testing.T) {
 		} else {
 			t.Log("template OK")
 		}
-		html, err := CreateOrderReceiptHtml(tmpl, test)
+		html, err := CreateHtmlTemplate(tmpl, test)
 		if err != nil {
 			t.Errorf("FAIL: %v", err)
 		}

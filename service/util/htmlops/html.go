@@ -27,7 +27,25 @@ type ItemSummary struct {
 	Quantity int
 }
 
-func CreateOrderReceiptHtml(tmpl string, data ReceiptTemplateData) (string, error) {
+type ShippingNotificationTemplateData struct {
+	OrderID        string
+	Carrier        string
+	ParcelQty      int
+	TrackingNumber string
+	TrackingUrl    string
+	Eta            string
+	FirstName      string
+	LastName       string
+	Address1       string
+	Address2       string
+	City           string
+	State          string
+	Zip            string
+	Phone          string
+	Items          []ItemSummary
+}
+
+func CreateHtmlTemplate(tmpl string, data interface{}) (string, error) {
 	t := template.New("order_notification")
 
 	var err error

@@ -38,3 +38,13 @@ func h(next http.HandlerFunc) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+// GetQueryStringParams returns an HTTP request's query string parameters.
+func GetQueryStringParams(r *http.Request) map[string]string {
+	data := make(map[string]string) // key value pairs for params
+	params := r.URL.Query()
+	for k, v := range params {
+		data[k] = v[0]
+	}
+	return data
+}

@@ -163,13 +163,18 @@ type ServiceLevel struct {
 
 // ShippingLabel contains info for a shipping label purchase.
 type ShippingLabel struct {
-	OrderID        string `json:"order_id"` // pk
-	LabelID        string `json:"label_id"` // sk
-	Carrier        string `json:"carrier"`
-	Price          string `json:"price"`
-	Currency       string `json:"currency"`
-	PurchaseDate   string `json:"purchase_date"`
-	TrackingNumber string `json:"tracking_number"`
+	OrderID              string `json:"order_id"` // pk
+	LabelID              string `json:"label_id"` // sk
+	Carrier              string `json:"carrier"`
+	Price                string `json:"price"`
+	Currency             string `json:"currency"`
+	PurchaseDate         string `json:"purchase_date"`
+	TrackingNumber       string `json:"tracking_number"`
+	TrackingStatus       string `json:"tracking_status"`
+	TrackingUrlProvider  string `json:"tracking_url_provider"`
+	Eta                  string `json:"eta"`
+	LabelUrl             string `json:"label_url"`
+	CommercialInvoiceUrl string `json:"commercial_invoice_url"`
 }
 
 // Shipment contains order shipping info used for order fulfillment at the time of shipping label purchase.
@@ -181,6 +186,7 @@ type Shipment struct {
 	AddressFrom   Address         `json:"address_from"`
 	Packages      []Package       `json:"packages"`
 	Rates         []RateSummary   `json:"rates"`
+	SelectedRate  RateSummary     `json:"selected_rate"`
 	Labels        []ShippingLabel `json:"labels"`
 	EstimatedDays int             `json:"estimated_days"`
 }

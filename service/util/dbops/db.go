@@ -78,6 +78,15 @@ const ShipmentsPK = "user_id"
 
 const ShipmentsSK = "order_id"
 
+// OpenOrdersTable contains the name of the Open Orders table.
+const OpenOrdersTable = "tpillz-open-orders-dev"
+
+// OpenOrdersPK contains the primary key name of the Open Orders table.
+const OpenOrdersPK = "user_id"
+
+// OpenOrdersSK contains the sort key name of the OpenOrders table.
+const OpenOrdersSK = "order_id"
+
 // ErrConditionCheckFail contains the error code values for failed conditional writes.
 const ErrConditionalCheck = "ERR_CONDITIONAL_CHECK"
 
@@ -229,6 +238,19 @@ func PutShipment(DB *dynamo.DbInfo, shipment *store.Shipment) error {
 	return nil
 }
 
+// GetShipment retreives a Shipment object from the ShipmentsTable.
+func GetShipment(DB *dynamo.DbInfo, userID, orderID string) (*store.Shipment, error) {
+	q := dynamo.CreateNewQueryObj(userID, orderID)
+	expr := dynamo.NewExpression()
+	item, err := dynamo.GetItem(DB.Svc, q, DB.Tables[ShipmentsTable], &store.Shipment{}, expr)
+	if err != nil {
+		log.Printf("GetShipment failed: %v", err)
+		return &store.Shipment{}, err
+	}
+
+	return item.(*store.Shipment), nil
+}
+
 func GetShippingMethod(DB *dynamo.DbInfo, methodName string) (*store.ShippingMethod, error) {
 	q := dynamo.CreateNewQueryObj(methodName, "")
 	expr := dynamo.NewExpression()
@@ -321,6 +343,18 @@ func GetOrderItems(DB *dynamo.DbInfo, userID, orderID string) (*store.Order, err
 	return item.(*store.Order), nil
 }
 
+// GetOpenOrder retreives an Order object from the Orders table.
+func GetOpenOrder(DB *dynamo.DbInfo, userID, orderID string) (*store.Order, error) {
+	q := dynamo.CreateNewQueryObj(userID, orderID)
+	expr := dynamo.NewExpression()
+	item, err := dynamo.GetItem(DB.Svc, q, DB.Tables[OpenOrdersTable], &store.Order{}, expr)
+	if err != nil {
+		log.Printf("GetOpenOrder failed: %v", err)
+		return &store.Order{}, err
+	}
+	return item.(*store.Order), nil
+}
+
 // PutOrder puts a new Order object to the Orders table.
 func PutOrder(DB *dynamo.DbInfo, user *store.Order) error {
 	err := dynamo.CreateItem(DB.Svc, user, DB.Tables[OrdersTable])
@@ -359,7 +393,52 @@ func UpdateOrderAddress(DB *dynamo.DbInfo, userID, orderID string, addr store.Ad
 		return err
 	}
 	return nil
+}
 
+func UpdateOrderShippingInfo(DB *dynamo.DbInfo, userID, orderID, status string, shipped bool) error {
+	// create and set update query
+	q := dynamo.CreateNewQueryObj(userID, orderID)
+	q.UpdateCurrent("order_status", status) // fix muliple fields
+	q.UpdateCurrent("shipped", shipped)     // fix muliple fields
+
+	// build expression
+	update := dynamo.NewUpdateExpr()
+	update.Set("order_status", status)
+	update.Set("shipped", shipped) // fix multiple values
+
+	eb := dynamo.NewExprBuilder()
+	eb.SetUpdate(update)
+	expression, err := eb.BuildExpression()
+	if err != nil {
+		log.Printf("UpdateOrderShippingInfo failed: %v", err)
+		return err
+	}
+
+	// update DB object
+	err = dynamo.UpdateItem(DB.Svc, q, DB.Tables[OrdersTable], expression)
+	if err != nil {
+		log.Printf("UpdateOrderShippingInfo failed: %v", err)
+		return err
+	}
+	return nil
+}
+
+// PutOpenOrder puts a new Order object to the Orders table.
+func PutOpenOrder(DB *dynamo.DbInfo, order *store.Order) error {
+	err := dynamo.CreateItem(DB.Svc, order, DB.Tables[OpenOrdersTable])
+	if err != nil {
+		log.Printf("PutOpenOrder failed: %v", err)
+	}
+	return nil
+}
+
+func DeleteOpenOrder(DB *dynamo.DbInfo, userID, orderID string) error {
+	q := dynamo.CreateNewQueryObj(userID, orderID)
+	err := dynamo.DeleteItem(DB.Svc, q, DB.Tables[OpenOrdersTable])
+	if err != nil {
+		log.Printf("DeleteOpenOrder failed: %v", err)
+	}
+	return nil
 }
 
 func UpdateOrderPaymentStatus(DB *dynamo.DbInfo, customerID, orderID, status string) error {

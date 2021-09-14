@@ -1,5 +1,9 @@
 package main
 
+/* payment API processes a customer's payment during the order checkout process. Inventory is updated on
+   receipt of payment, and the processOrder service is notified of the sucessful payment. A receipt is returned
+   to the customer upon completion. */
+
 import (
 	"encoding/json"
 	"errors"
@@ -280,9 +284,7 @@ func RootHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("payment status message sent: %v", msgID)
 
 	// generate customer receipt to return to user
-	receipt := store.Receipt{}
-	receipt.New(cust, order)
-
+	receipt := order.NewReceipt()
 	httpops.ErrResponse(w, "Order success! Receipt: : ", receipt, http.StatusOK)
 	return
 }

@@ -56,7 +56,7 @@ func SendCustomerReceipt(svc interface{}, from string, order *store.Order) error
 		Phone:      order.Shipment.AddressTo.PhoneNumber,
 		Items:      items,
 	}
-	html, err := htmlops.CreateOrderReceiptHtml(tmpl, htmlInput)
+	html, err := htmlops.CreateHtmlTemplate(tmpl, htmlInput)
 	if err != nil {
 		log.Printf("SendCustomerReceipt failed: %v", err)
 		return err
@@ -122,7 +122,7 @@ func SendOrderNotification(svc interface{}, from, notifyEmail string, order *sto
 		Phone:      order.Shipment.AddressTo.PhoneNumber,
 		Items:      items,
 	}
-	html, err := htmlops.CreateOrderReceiptHtml(tmpl, htmlInput)
+	html, err := htmlops.CreateHtmlTemplate(tmpl, htmlInput)
 	if err != nil {
 		log.Printf("SendCustomerReceipt failed: %v", err)
 		return err
@@ -135,6 +135,64 @@ func SendOrderNotification(svc interface{}, from, notifyEmail string, order *sto
 	for {
 		// receive messages from queue
 		err := goses.SendEmail(svc, []string{notifyEmail}, []string{}, from, subject, text, html)
+		if err != nil {
+			// retry with backoff if error
+			if retries > maxRetries {
+				log.Printf("SendCustomerReceipt failed: %v -- max retries exceeded", err)
+				return err
+			}
+			log.Printf("SendCustomerReceipt failed: %v -- retrying...", err)
+			time.Sleep(time.Duration(backoff) * time.Millisecond)
+			backoff = backoff * 2
+			retries++
+			continue
+		}
+
+		return nil
+	}
+}
+
+// SendShippingNotification sends an order notification email intended for the business admin and/or fulfillment team.
+// 'from' specifies the 'from' address (ex: orders@store.com), 'notifyEmail' specifies the 'to' address (ex: fulfillment@store.com).
+func SendShippingNotification(svc interface{}, from, to string, shipment *store.Shipment) error {
+	// generate receipt and email info
+	subject := fmt.Sprintf("Order #%s Shipped!", shipment.OrderID)
+	text := fmt.Sprintf("Order #%s shipped!", shipment.OrderID)
+	tmpl, err := s3ops.GetShippingNotificationHtmlTemplate(s3ops.InitSesh())
+	if err != nil {
+		log.Printf("SendShippingNotification failed: %v", err)
+		return err
+	}
+
+	htmlInput := htmlops.ShippingNotificationTemplateData{
+		OrderID:        shipment.OrderID,
+		Carrier:        shipment.Labels[0].Carrier,
+		ParcelQty:      len(shipment.Packages),
+		TrackingNumber: shipment.Labels[0].TrackingNumber,
+		TrackingUrl:    shipment.Labels[0].TrackingUrlProvider,
+		Eta:            shipment.Labels[0].Eta,
+		FirstName:      shipment.AddressTo.FirstName,
+		LastName:       shipment.AddressTo.LastName,
+		Address1:       shipment.AddressTo.AddressLine1,
+		Address2:       shipment.AddressTo.AddressLine2,
+		City:           shipment.AddressTo.City,
+		State:          shipment.AddressTo.State,
+		Zip:            shipment.AddressTo.Zip,
+		Phone:          shipment.AddressTo.PhoneNumber,
+	}
+	html, err := htmlops.CreateHtmlTemplate(tmpl, htmlInput)
+	if err != nil {
+		log.Printf("SendCustomerReceipt failed: %v", err)
+		return err
+	}
+
+	// poll for messages with exponential backoff for errors & empty responses
+	retries := 0
+	maxRetries := 4
+	backoff := 1000.0
+	for {
+		// receive messages from queue
+		err := goses.SendEmail(svc, []string{to}, []string{}, from, subject, text, html)
 		if err != nil {
 			// retry with backoff if error
 			if retries > maxRetries {

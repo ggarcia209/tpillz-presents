@@ -31,6 +31,9 @@ const InventoryActionAdd = "ADD"
 
 const InventoryActionSub = "SUB"
 
+// FulfillmentFifoQueue contains the name of the fulfillment queue used for viewing and actioning open orders.
+const FulfillmentFifoQueue = "fufillment.fifo"
+
 // Staging contains pkg store objects to be staged in the StagingQueue, which are processed
 // on receipt of a StripeTxStatus message.
 type Staging struct {
@@ -56,6 +59,12 @@ type stagingPollResponse struct {
 // return type for PollStripeTxStatusQueue
 type paymentStatusPollResponse struct {
 	Statuses       []store.PaymentStatus `json:"statuses"`
+	MessageIDs     []string              `json:"message_ids"`
+	ReceiptHandles []string              `json:"receipt_handles"`
+}
+
+type FulfillmentPollResponsee struct {
+	Orders         []*store.OrderSummary `json:"orders"`
 	MessageIDs     []string              `json:"message_ids"`
 	ReceiptHandles []string              `json:"receipt_handles"`
 }
@@ -207,6 +216,49 @@ func SendPaymentStatusMessage(svc interface{}, url string, status store.PaymentS
 
 }
 
+// SendFulfillmentMessage sends an order to the Fulfillment queue for actioning.
+func SendFulfillmentMessage(svc interface{}, url string, order *store.OrderSummary) (string, error) {
+	// re-encode to JSON
+	json, err := json.Marshal(order)
+	if err != nil {
+		log.Printf("SendInventoryUpdateMessage failed: %v", err)
+		return "", err
+	}
+
+	deDupeID := gosqs.GenerateDedupeID(string(json))
+
+	options := gosqs.SendMsgOptions{
+		DelaySeconds:            gosqs.SendMsgDefault.DelaySeconds,
+		MessageAttributes:       nil,
+		MessageBody:             string(json),
+		MessageDeduplicationId:  deDupeID,
+		MessageGroupId:          deDupeID,
+		MessageSystemAttributes: nil,
+		QueueURL:                url,
+	}
+
+	retries := 0
+	maxRetries := 2
+	backoff := 1000
+
+	for {
+		resp, err := gosqs.SendMessage(svc, options)
+		if err != nil {
+			// retry with backoff if error
+			if retries > maxRetries {
+				log.Printf("SendFulfillmentMessage failed: %v -- max retries exceeded", err)
+				return "", err
+			}
+			log.Printf("SendFulfillmentMessage failed: %v -- retrying...", err)
+			time.Sleep(time.Duration(backoff) * time.Millisecond)
+			backoff = backoff * 2
+			retries++
+			continue
+		}
+		return resp.MessageId, nil
+	}
+}
+
 // PollStagingQueue receives 10 messages from the order staging queue.
 func PollStagingQueue(svc interface{}, url string) (stagingPollResponse, error) {
 	resp := stagingPollResponse{}
@@ -350,6 +402,78 @@ func PollPaymentStatusQueue(svc interface{}, url string) (paymentStatusPollRespo
 		resp.Statuses, resp.MessageIDs, resp.ReceiptHandles = statuses, messageIDs, handles
 		return resp, nil
 	}
+}
+
+// PollFulfillment receives 5 messages from the fulfillment queue.
+func PollFulfillmentQueue(svc interface{}, url string) (FulfillmentPollResponsee, error) {
+	resp := FulfillmentPollResponsee{}
+	idSet := make(map[string]bool) // check for duplicates
+
+	// set receive message options
+	options := gosqs.RecMsgOptions{
+		AttributeNames:          gosqs.RecMsgDefault.AttributeNames,
+		MaxNumberOfMessages:     int64(5),
+		MessageAttributeNames:   gosqs.RecMsgDefault.MessageAttributeNames,
+		QueueURL:                url,
+		ReceiveRequestAttemptId: gosqs.RecMsgDefault.ReceiveRequestAttemptId,
+		VisibilityTimeout:       int64(90), // adjust to delete msg after actioning order
+		WaitTimeSeconds:         int64(0),
+	}
+
+	// poll for messages with exponential backoff for errors & empty responses
+	retries := 0
+	maxRetries := 4
+	backoff := 1000.0
+	for {
+		// receive messages from queue
+		msgs, err := gosqs.ReceiveMessage(svc, options)
+		if err != nil {
+			// retry with backoff if error
+			if retries > maxRetries {
+				log.Printf("PollFulfillmentQueue failed: %v -- max retries exceeded", err)
+				return resp, err
+			}
+			log.Printf("PollFulfillmentQueue failed: %v -- retrying...", err)
+			time.Sleep(time.Duration(backoff) * time.Millisecond)
+			backoff = backoff * 2
+			retries++
+			continue
+		}
+		// retry up to 2 times if no messages received w/o error response
+		if len(msgs) == 0 {
+			if retries > 1 {
+				log.Printf("no messages received - max retries exceeded")
+				return resp, nil
+			}
+			log.Printf("no messages received - retrying...")
+			time.Sleep(time.Duration(backoff) * time.Millisecond)
+			backoff = backoff * 2
+			retries++
+			continue
+		} else {
+			log.Printf("messages received: %v", len(msgs))
+		}
+
+		for _, msg := range msgs {
+			// get stage info from json in message body
+			order := store.OrderSummary{}
+			err := json.Unmarshal([]byte(msg.Body), &order)
+			if err != nil {
+				log.Printf("PollFulfillmentQueue failed - json failed to unmarshall: %v", err)
+				continue
+			}
+
+			if idSet[msg.MessageId] != true {
+				resp.Orders = append(resp.Orders, &order)
+				resp.MessageIDs = append(resp.MessageIDs, msg.MessageId)
+				resp.ReceiptHandles = append(resp.ReceiptHandles, msg.ReceiptHandle)
+				idSet[msg.MessageId] = true
+			}
+		}
+
+		return resp, nil
+	}
+
 }
 
 func ChangeMsgVisibility(svc interface{}, url string, messageIDs, handles []string, timeout int) error {
