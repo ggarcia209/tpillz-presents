@@ -1,5 +1,5 @@
 # tpillz-presents
-Webapp and website built for client that features an online store, media sharing, and blog posts. Project will primarily consist of Golang for backend code and JavaScript for front end. App will be deployed on Heroku. Below is a rough outline of the project's features. More info will be added and ReadMe will be updated throughout the development process. 
+Webapp and website built for client that features an online store, media sharing, and blog posts. Project will primarily consist of Golang for backend code and JavaScript for front end. App will be deployed on AWS using Serverless Application Model. Below is a rough outline of the project's features. More info will be added and ReadMe will be updated throughout the development process. 
 
 Core Features
 1. Store
