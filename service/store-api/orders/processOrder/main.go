@@ -83,6 +83,7 @@ func RootHandler(w http.ResponseWriter, r *http.Request) {
 			httpops.ErrResponse(w, "Internal server error: ", "INVALID_TX_STATUS: "+status.TxStatus, http.StatusInternalServerError)
 			return
 		}
+		// refactor to update each object's fields in one api call
 		err := dbops.UpdateOrderPaymentStatus(DB, custID, status.OrderID, status.TxStatus)
 		if err != nil {
 			log.Printf("processOrder failed: %v", err)
@@ -116,6 +117,11 @@ func RootHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// UPDATE TO ACTION PER TRANSACTION STATUS
+		// -- send inventory update message
+		// --
+
+		// WRAP IN CONDITIONAL LOGIC FOR ON PAYMENT SUCCESS
 		// forward order to SNS topics
 		msgID, err := snsops.PublishOrderNotification(sns, order, FulfillmentTopicARN)
 		if err != nil {

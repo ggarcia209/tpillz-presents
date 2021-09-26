@@ -26,7 +26,7 @@ func SendCustomerReceipt(svc interface{}, from string, order *store.Order) error
 	// generate receipt and email info
 	// receipt := order.NewReceipt()
 	subject := fmt.Sprintf("Thank you from ACamoPrjct! (Order #%s)", order.OrderID)
-	text := fmt.Sprintf("Order #%s received! Price: %0.2f | Estimated Shipping Days: %d", order.OrderID, order.OrderTotal, order.Shipment.EstimatedDays)
+	text := fmt.Sprintf("Order #%s received! Price: %0.2f", order.OrderID, order.OrderTotal)
 	tmpl, err := s3ops.GetReceiptHtmlTemplate(s3ops.InitSesh())
 	if err != nil {
 		log.Printf("SendCustomerReceipt failed: %v", err)
@@ -46,14 +46,14 @@ func SendCustomerReceipt(svc interface{}, from string, order *store.Order) error
 		Shipping:   order.ShippingCost,
 		SalesTax:   order.SalesTax,
 		OrderTotal: order.OrderTotal,
-		FirstName:  order.Shipment.AddressTo.FirstName,
-		LastName:   order.Shipment.AddressTo.LastName,
-		Address1:   order.Shipment.AddressTo.AddressLine1,
-		Address2:   order.Shipment.AddressTo.AddressLine2,
-		City:       order.Shipment.AddressTo.City,
-		State:      order.Shipment.AddressTo.State,
-		Zip:        order.Shipment.AddressTo.Zip,
-		Phone:      order.Shipment.AddressTo.PhoneNumber,
+		FirstName:  order.ShippingAddress.FirstName,
+		LastName:   order.ShippingAddress.LastName,
+		Address1:   order.ShippingAddress.AddressLine1,
+		Address2:   order.ShippingAddress.AddressLine2,
+		City:       order.ShippingAddress.City,
+		State:      order.ShippingAddress.State,
+		Zip:        order.ShippingAddress.Zip,
+		Phone:      order.ShippingAddress.PhoneNumber,
 		Items:      items,
 	}
 	html, err := htmlops.CreateHtmlTemplate(tmpl, htmlInput)
@@ -112,14 +112,14 @@ func SendOrderNotification(svc interface{}, from, notifyEmail string, order *sto
 		Shipping:   order.ShippingCost,
 		SalesTax:   order.SalesTax,
 		OrderTotal: order.OrderTotal,
-		FirstName:  order.Shipment.AddressTo.FirstName,
-		LastName:   order.Shipment.AddressTo.LastName,
-		Address1:   order.Shipment.AddressTo.AddressLine1,
-		Address2:   order.Shipment.AddressTo.AddressLine2,
-		City:       order.Shipment.AddressTo.City,
-		State:      order.Shipment.AddressTo.State,
-		Zip:        order.Shipment.AddressTo.Zip,
-		Phone:      order.Shipment.AddressTo.PhoneNumber,
+		FirstName:  order.ShippingAddress.FirstName,
+		LastName:   order.ShippingAddress.LastName,
+		Address1:   order.ShippingAddress.AddressLine1,
+		Address2:   order.ShippingAddress.AddressLine2,
+		City:       order.ShippingAddress.City,
+		State:      order.ShippingAddress.State,
+		Zip:        order.ShippingAddress.Zip,
+		Phone:      order.ShippingAddress.PhoneNumber,
 		Items:      items,
 	}
 	html, err := htmlops.CreateHtmlTemplate(tmpl, htmlInput)

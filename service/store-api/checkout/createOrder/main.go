@@ -109,7 +109,7 @@ func RootHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// get customer
-	cust, err := dbops.GetCustomer(DB, data.UserEmail)
+	cust, err := dbops.GetCustomer(DB, data.UserEmail) // change to user_id
 	if err != nil {
 		log.Printf("RootHandler failed: %v", err)
 		httpops.ErrResponse(w, "Internal Server Error: "+err.Error(), failMsg, http.StatusInternalServerError)

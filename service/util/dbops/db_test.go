@@ -3,6 +3,7 @@ package dbops
 import (
 	"fmt"
 	"log"
+	"os"
 	"sync"
 	"testing"
 
@@ -27,18 +28,19 @@ func TestPutStoreItem(t *testing.T) {
 	}
 
 	// init db
-	table := NewTable(StoreItemsTable, StoreItemPK, StoreItemSK)
+	os.Setenv(EnvarStoreItemsTable, "tpillz-store-items-dev")
+	table := NewTable(StoreItemsTable(), StoreItemPK, StoreItemSK)
 	tables := []Table{table}
 	dbInfo := InitDB(tables)
 
 	for _, test := range tests {
 		item := &store.StoreItem{
-			ItemID:         test.itemID,
-			Name:           test.name,
-			Category:       test.category,
-			Subcategory:    test.subcat,
-			Price:          test.price,
-			UnitsSold:      test.unitsSold,
+			ItemID:      test.itemID,
+			Name:        test.name,
+			Category:    test.category,
+			Subcategory: test.subcat,
+			Price:       test.price,
+			// UnitsSold:      test.unitsSold,
 			UnitsAvailable: test.unitsAvailable,
 		}
 		err := PutStoreItem(dbInfo, item)
@@ -61,7 +63,9 @@ func TestGetStoreItem(t *testing.T) {
 		{subcat: "shirts", itemID: "007", wantName: ""}, // non existent item
 	}
 
-	table := NewTable(StoreItemsTable, StoreItemPK, StoreItemSK)
+	os.Setenv(EnvarStoreItemsTable, "tpillz-store-items-dev")
+
+	table := NewTable(StoreItemsTable(), StoreItemPK, StoreItemSK)
 	tables := []Table{table}
 	dbInfo := InitDB(tables)
 
@@ -87,7 +91,9 @@ func TestCheckInventory(t *testing.T) {
 		{item: &store.CartItem{Subcategory: "pants", ItemID: "010", Size: "32", Quantity: 1}, want: false},    // Non existent partition
 	}
 
-	table := NewTable(StoreItemsTable, StoreItemPK, StoreItemSK)
+	os.Setenv(EnvarStoreItemsTable, "tpillz-store-items-dev")
+
+	table := NewTable(StoreItemsTable(), StoreItemPK, StoreItemSK)
 	tables := []Table{table}
 	dbInfo := InitDB(tables)
 	bc := make(chan map[string]bool)
@@ -151,7 +157,9 @@ func TestUpdateInventoryCount(t *testing.T) {
 		{subcat: "shirts", itemID: "007", sizeKey: "OS", count: 2, wantErr: fmt.Errorf(ErrConditionalCheck)},  // ITEM DOES NOT EXIST
 	}
 
-	table := NewTable(StoreItemsTable, StoreItemPK, StoreItemSK)
+	os.Setenv(EnvarStoreItemsTable, "tpillz-store-items-dev")
+
+	table := NewTable(StoreItemsTable(), StoreItemPK, StoreItemSK)
 	tables := []Table{table}
 	dbInfo := InitDB(tables)
 
@@ -165,6 +173,143 @@ func TestUpdateInventoryCount(t *testing.T) {
 			if err.Error() != test.wantErr.Error() {
 				t.Errorf("FAIL: %v; want: %v", err, test.wantErr)
 			}
+		}
+	}
+}
+
+func TestUpdateStoreItemObj(t *testing.T) {
+	var tests = []struct {
+		subcat    string
+		itemID    string
+		fieldName string
+		value     interface{}
+	}{
+		{subcat: "game_sets", itemID: "001", fieldName: "price", value: 25.95},
+		{subcat: "game_sets", itemID: "002", fieldName: "name", value: "PawnWars Battle Unit Chess Pieces"},
+		// {subcat: "posters", itemID: "003", fieldName: "sub_category", value: "promo"},   // ValidationException error
+		{subcat: "posters", itemID: "003", fieldName: "price", value: "9.95"},           // invalid type for field - ok
+		{subcat: "posters", itemID: "003", fieldName: "date_added", value: "9/24/2021"}, // field not set - ok
+		{subcat: "posters", itemID: "003", fieldName: "supplier", value: "China"},       // field does not exist - ok
+		// {subcat: "posters", itemID: "003", fieldName: "", value: ""},                    // empty values -> BuildOperand error
+	}
+
+	os.Setenv(EnvarStoreItemsTable, "tpillz-store-items-dev")
+
+	table := NewTable(StoreItemsTable(), StoreItemPK, StoreItemSK)
+	tables := []Table{table}
+	dbInfo := InitDB(tables)
+
+	for _, test := range tests {
+		err := UpdateStoreItem(dbInfo, test.subcat, test.itemID, test.fieldName, test.value)
+		if err != nil {
+			t.Errorf("FAIL: %v", err)
+		}
+	}
+}
+
+func TestUpdateStoreItemSummary(t *testing.T) {
+	var tests = []struct {
+		subcat    string
+		itemID    string
+		fieldName string
+		value     interface{}
+	}{
+		{subcat: "game_sets", itemID: "001", fieldName: "price", value: 25.95},
+		{subcat: "game_sets", itemID: "002", fieldName: "name", value: "PawnWars Battle Unit Chess Pieces"},
+		// {subcat: "posters", itemID: "003", fieldName: "sub_category", value: "promo"},
+		{subcat: "posters", itemID: "003", fieldName: "price", value: "9.95"},           // invalid type for field
+		{subcat: "posters", itemID: "003", fieldName: "date_added", value: "9/24/2021"}, // field not set
+		{subcat: "posters", itemID: "003", fieldName: "supplier", value: "China"},       // field does not exist
+		// {subcat: "posters", itemID: "003", fieldName: "", value: ""},                    // empty values
+	}
+
+	os.Setenv(EnvarStoreItemsSummaryTable, "tpillz-store-items-summary-dev")
+
+	table := NewTable(StoreItemsSummaryTable(), StoreItemSummaryPK, StoreItemSummarySK)
+	tables := []Table{table}
+	dbInfo := InitDB(tables)
+
+	for _, test := range tests {
+		err := UpdateStoreItemSummary(dbInfo, test.subcat, test.itemID, test.fieldName, test.value)
+		if err != nil {
+			t.Errorf("FAIL: %v", err)
+		}
+	}
+}
+
+func TestDeleteStoreItem(t *testing.T) {
+	var tests = []struct {
+		subcat string
+		itemID string
+		err    error
+	}{
+		{subcat: "posters", itemID: "003", err: nil},
+		{subcat: "posters", itemID: "009", err: nil},
+	}
+	os.Setenv(EnvarStoreItemsTable, "tpillz-store-items-dev")
+	table := NewTable(StoreItemsTable(), StoreItemPK, StoreItemSK)
+	tables := []Table{table}
+	dbInfo := InitDB(tables)
+
+	for _, test := range tests {
+		err := DeleteStoreItem(dbInfo, test.subcat, test.itemID)
+		if err != nil {
+			t.Errorf("FAIL: %v", err)
+		}
+	}
+}
+
+// ScanItems failed: ValidationException: The provided starting key is invalid: The provided key element does not match the schema
+func TestScanItems(t *testing.T) {
+	var tests = []struct {
+		subcat string
+		err    error
+	}{
+		{subcat: "game_sets", err: nil},
+		{subcat: "posters", err: nil},
+		{subcat: "", err: nil},
+	}
+
+	os.Setenv(EnvarStoreItemsSummaryTable, "tpillz-store-items-summary-dev")
+	table := NewTable(StoreItemsSummaryTable(), StoreItemSummaryPK, StoreItemSummarySK)
+	tables := []Table{table}
+	dbInfo := InitDB(tables)
+
+	for _, test := range tests {
+		items, err := ScanItemsForCategory(dbInfo, test.subcat)
+		if err != nil {
+			t.Errorf("FAIL: %v", err)
+		}
+		for _, item := range items {
+			t.Logf("item: %v", item)
+		}
+	}
+}
+
+func TestBatchGetStoreItemSummary(t *testing.T) {
+	var tests = []struct {
+		subcat string
+		ids    []string
+		err    error
+	}{
+		{subcat: "game_sets", ids: []string{"PCS-69d48d59", "PCP-65d655cb"}, err: nil}, // id values from existing db items
+		{subcat: "posters", ids: []string{"PSP-44984760"}, err: nil},
+		// {subcat: "", ids: []string{}, err: nil},
+	}
+
+	os.Setenv(EnvarStoreItemsSummaryTable, "tpillz-store-items-summary-dev")
+	table := NewTable(StoreItemsSummaryTable(), StoreItemSummaryPK, StoreItemSummarySK)
+	tables := []Table{table}
+	dbInfo := InitDB(tables)
+
+	for _, test := range tests {
+		items, err := BatchGetStoreItemSummary(dbInfo, test.subcat, test.ids)
+		t.Logf("len(items): %v", len(items))
+		if err != nil {
+			t.Errorf("FAIL: %v", err)
+		}
+		for _, item := range items {
+			t.Logf("item: %v", item)
 		}
 	}
 }

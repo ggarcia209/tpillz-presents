@@ -34,6 +34,13 @@ const InventoryActionSub = "SUB"
 // FulfillmentFifoQueue contains the name of the fulfillment queue used for viewing and actioning open orders.
 const FulfillmentFifoQueue = "fufillment.fifo"
 
+// ErrMsgNotDeleted contains the error code value for the error returned by PollFulfillmentQueueForDelete
+// when the message targeted for deletion is not found in the polled batch.
+const ErrMsgNotDeleted = "ERR_MSG_NOT_DELETED"
+
+// ErrEmptyQueue contains the error code for when a queue is empty/exhausted an no messages are received.
+const ErrEmptyQueue = "ERR_EMPTY_QUEUE"
+
 // Staging contains pkg store objects to be staged in the StagingQueue, which are processed
 // on receipt of a StripeTxStatus message.
 type Staging struct {
@@ -472,6 +479,78 @@ func PollFulfillmentQueue(svc interface{}, url string) (FulfillmentPollResponsee
 		}
 
 		return resp, nil
+	}
+
+}
+
+// PollFulfillment receives 5 messages from the fulfillment queue.
+func PollFulfillmentQueueForDelete(svc interface{}, url, orderID string) error {
+	// set receive message options
+	options := gosqs.RecMsgOptions{
+		AttributeNames:          gosqs.RecMsgDefault.AttributeNames,
+		MaxNumberOfMessages:     int64(10),
+		MessageAttributeNames:   gosqs.RecMsgDefault.MessageAttributeNames,
+		QueueURL:                url,
+		ReceiveRequestAttemptId: gosqs.RecMsgDefault.ReceiveRequestAttemptId,
+		VisibilityTimeout:       int64(3), // adjust to delete msg after actioning order
+		WaitTimeSeconds:         int64(0),
+	}
+
+	// poll for messages with exponential backoff for errors & empty responses
+	retries := 0
+	maxRetries := 4
+	backoff := 1000.0
+	for {
+		// receive messages from queue
+		msgs, err := gosqs.ReceiveMessage(svc, options)
+		if err != nil {
+			// retry with backoff if error
+			if retries > maxRetries {
+				log.Printf("PollFulfillmentQueueForDelete failed: %v -- max retries exceeded", err)
+				return err
+			}
+			log.Printf("PollFulfillmentQueueForDelete failed: %v -- retrying...", err)
+			time.Sleep(time.Duration(backoff) * time.Millisecond)
+			backoff = backoff * 2
+			retries++
+			continue
+		}
+		// retry up to 2 times if no messages received w/o error response
+		if len(msgs) == 0 {
+			if retries > 1 {
+				log.Printf("no messages received - max retries exceeded")
+				return fmt.Errorf(ErrEmptyQueue)
+			}
+			log.Printf("no messages received - retrying...")
+			time.Sleep(time.Duration(backoff) * time.Millisecond)
+			backoff = backoff * 2
+			retries++
+			continue
+		} else {
+			log.Printf("messages received: %v", len(msgs))
+		}
+
+		for _, msg := range msgs {
+			// get stage info from json in message body
+			order := store.OrderSummary{}
+			err := json.Unmarshal([]byte(msg.Body), &order)
+			if err != nil {
+				log.Printf("PollFulfillmentQueueForDelete failed - json failed to unmarshall: %v", err)
+				continue
+			}
+
+			// delete message if matching orderID
+			if order.OrderID == orderID {
+				err := DeleteMessages(svc, url, []string{msg.MessageId}, []string{msg.ReceiptHandle})
+				if err != nil {
+					log.Printf("PollFulfillmentQueueForDelete failed - json failed to unmarshall: %v", err)
+					return err
+				}
+				return nil
+			}
+		}
+
+		return fmt.Errorf(ErrMsgNotDeleted)
 	}
 
 }

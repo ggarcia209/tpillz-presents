@@ -112,21 +112,46 @@ type StoreItem struct {
 	Category       string         `json:"category"`
 	Subcategory    string         `json:"sub_category"`
 	Price          float32        `json:"price"`
-	UnitsSold      int            `json:"units_sold"`
+	UnitsSold      map[string]int `json:"units_sold"`
+	ProductViews   int            `json:"product_views"`   // number of times product viewed
 	UnitsAvailable map[string]int `json:"units_available"` // size: units
 	UnitWeightOzs  float32        `json:"unit_weight_ozs"`
 	UnitWeightLbs  float32        `json:"unit_weight_lbs"`
 	DateAdded      string         `json:"date_added"`
+	ImageUrls      []string       `json:"image_urls"` // src urls for html images for product
+}
+
+// StoreItemIndex represent a k/v pair of a subcategory and a list of all items belonging to that subcategory.
+type StoreItemIndex struct {
+	Subcategory string   `json:"sub_category"`
+	ItemIDs     []string `json:"item_ids"`
+}
+
+// Push adds a new itemID to the index record.
+func (s *StoreItemIndex) Push(itemID string) {
+	s.ItemIDs = append(s.ItemIDs, itemID)
+}
+
+// Remove deletes the given itemID from the index record.
+func (s *StoreItemIndex) Remove(itemID string) {
+	// update to binary search logic
+	new := []string{}
+	for _, id := range s.ItemIDs {
+		if id != itemID {
+			new = append(new, id)
+		}
+	}
+	s.ItemIDs = new
 }
 
 // StoreItemSummary contains summarized info of each StoreItem that is displayed when
 // a user is browsing a selection of items.
 type StoreItemSummary struct {
-	ItemID      string  `json:"item_id"`
-	Subcategory string  `json:"subcategory"`
-	Name        string  `json:"name"`
-	Price       float32 `json:"price"`
-	ThumbnailID string  `json:"thumbnail_id"`
+	ItemID       string  `json:"item_id"`
+	Subcategory  string  `json:"sub_category"`
+	Name         string  `json:"name"`
+	Price        float32 `json:"price"`
+	ThumbnailUrl string  `json:"thumbnail_url"`
 }
 
 // Transaction represents a monetary transaction between the store and a user.

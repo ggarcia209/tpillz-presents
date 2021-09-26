@@ -3,20 +3,35 @@ package dbops
 import (
 	"fmt"
 	"log"
+	"os"
 	"sync"
 
 	"github.com/go-aws/go-dynamo/dynamo"
 	"github.com/tpillz-presents/service/store-api/store"
 )
 
+// DB Table Environment Variable Names
+const (
+	EnvarCustomersTable         = "DB_CUSTOMERS_TABLE"
+	EnvarOrdersTable            = "DB_ORDERS_TABLE"
+	EnvarOpenOrdersTable        = "DB_OPEN_ORDERS_TABLE"
+	EnvarParcelsTable           = "DB_PARCELS_TABLE"
+	EnvarShipmentsTable         = "DB_SHIPMENTS_TABLE"
+	EnvarShoppingCartsTable     = "DB_SHOPPING_CARTS_TABLE"
+	EnvarStoreItemsTable        = "DB_STORE_ITEMS_TABLE"
+	EnvarStoreItemsIndexTable   = "DB_STORE_ITEMS_INDEX_TABLE"
+	EnvarStoreItemsSummaryTable = "DB_STORE_ITEMS_SUMMARY_TABLE"
+	EnvarTransactionsTable      = "DB_TRANSACTIONS_TABLE"
+)
+
 // CustomersTable contains the name of the Users Table.
-const CustomersTable = "tpillz-customers-dev"
+var CustomersTable = os.Getenv(EnvarCustomersTable)
 
 // CustomersPK contains the primary key name of the Users Table.
 const CustomersPK = "email"
 
 // StoreItemsTable contains the name of the StoreItems Table.
-const StoreItemsTable = "tpillz-store-items-dev"
+func StoreItemsTable() string { return os.Getenv(EnvarStoreItemsTable) }
 
 // StoreItemPK contains the primary key name of the StoreItems Table.
 const StoreItemPK = "sub_category"
@@ -24,8 +39,14 @@ const StoreItemPK = "sub_category"
 // StoreItemSK contains the sort key name of the StoreItems Table.
 const StoreItemSK = "item_id"
 
+// StoreItemsIndexTable contains the name of the StoreItemsIndex Table.
+func StoreItemsIndexTable() string { return os.Getenv(EnvarStoreItemsIndexTable) }
+
+// StoreItemPK contains the primary key name of the StoreItems Table.
+const StoreItemsIndexPK = "sub_category"
+
 // StoreItemsSummaryTable contains the name of the StoreItemsSumary Table.
-const StoreItemsSummaryTable = "tpillz-store-items-summary-dev"
+func StoreItemsSummaryTable() string { return os.Getenv(EnvarStoreItemsSummaryTable) }
 
 // StoreItemSummaryPK contains the primary key name of the StoreItemsSumary Table.
 const StoreItemSummaryPK = "sub_category"
@@ -34,19 +55,13 @@ const StoreItemSummaryPK = "sub_category"
 const StoreItemSummarySK = "item_id"
 
 // ShoppingCartsTable contains the name of the ShoppingCarts Table.
-const ShoppingCartsTable = "tpillz-shopping-carts-dev"
+func ShoppingCartsTable() string { return os.Getenv(EnvarShoppingCartsTable) }
 
 // ShoppingCartsPK contains the primary key name of the ShoppingCarts Table.
 const ShoppingCartsPK = "user_id"
 
-// ShippingMethodsTable contains the name of the ShippingMethods table.
-const ShippingMethodsTable = "tpillz-shipping-methods"
-
-// ShippingMethodsPK contains the primary key name of the ShippingMethods table.
-const ShippingMethodsPK = "method_name"
-
 // OrdersTable contains the name of the Orders table.
-const OrdersTable = "tpillz-orders-dev"
+func OrdersTable() string { return os.Getenv(EnvarOrdersTable) }
 
 // OrdersPK contains the primary key name of the Orders table.
 const OrdersPK = "user_id"
@@ -55,7 +70,7 @@ const OrdersPK = "user_id"
 const OrdersSK = "order_id"
 
 // TransactionsTable contains the name of the Transactions Table.
-const TransactionsTable = "tpillz-transactions-dev"
+func TransactionsTable() string { return os.Getenv(EnvarTransactionsTable) }
 
 // TransactionsPK contains the primary key name of the Transactions Table.
 const TransactionsPK = "user_id"
@@ -64,7 +79,7 @@ const TransactionsPK = "user_id"
 const TransactionsSK = "transaction_id"
 
 // ParcelsTable contains the table name of the parcels table - contains parcel data used for shipping.
-const ParcelsTable = "tpillz-parcels-dev"
+func ParcelsTable() string { return os.Getenv(EnvarParcelsTable) }
 
 const ParcelsPK = "carrier"
 
@@ -72,14 +87,14 @@ const ParcelsSK = "parcel_id"
 
 // ShipmentsTable contains the table name of the Shipments table
 // containing information about order shipments used for order fullfillment.
-const ShipmentsTable = "tpillz-shipments-dev"
+func ShipmentsTable() string { return os.Getenv(EnvarShipmentsTable) }
 
 const ShipmentsPK = "user_id"
 
 const ShipmentsSK = "order_id"
 
 // OpenOrdersTable contains the name of the Open Orders table.
-const OpenOrdersTable = "tpillz-open-orders-dev"
+func OpenOrdersTable() string { return os.Getenv(EnvarOpenOrdersTable) }
 
 // OpenOrdersPK contains the primary key name of the Open Orders table.
 const OpenOrdersPK = "user_id"
@@ -133,7 +148,7 @@ func InitDB(tables []Table) *dynamo.DbInfo {
 func GetStoreItem(DB *dynamo.DbInfo, subcategory, itemID string) (*store.StoreItem, error) {
 	q := dynamo.CreateNewQueryObj(subcategory, itemID)
 	expr := dynamo.NewExpression()
-	item, err := dynamo.GetItem(DB.Svc, q, DB.Tables[StoreItemsTable], &store.StoreItem{}, expr)
+	item, err := dynamo.GetItem(DB.Svc, q, DB.Tables[StoreItemsTable()], &store.StoreItem{}, expr)
 	if err != nil {
 		log.Printf("GetStoreItem failed: %v", err)
 		return &store.StoreItem{}, err
@@ -141,41 +156,187 @@ func GetStoreItem(DB *dynamo.DbInfo, subcategory, itemID string) (*store.StoreIt
 	return item.(*store.StoreItem), nil
 }
 
+func BatchGetStoreItemSummary(DB *dynamo.DbInfo, subcategory string, itemIDs []string) ([]*store.StoreItemSummary, error) {
+	queries := []*dynamo.Query{}
+	results := []*store.StoreItemSummary{}
+	models := []interface{}{}
+	for _, id := range itemIDs {
+		q := dynamo.CreateNewQueryObj(subcategory, id)
+		queries = append(queries, q)
+		m := &store.StoreItemSummary{}
+		models = append(models, m)
+	}
+	expr := dynamo.NewExpression()
+	fc := &dynamo.FailConfig{} // use default
+	items, err := dynamo.BatchGet(DB.Svc, DB.Tables[StoreItemsSummaryTable()], fc, queries, models, expr)
+	if err != nil {
+		log.Printf("BatchGetStoreItemSummary failed: %v", err)
+		return results, err
+	}
+
+	for _, item := range items {
+		results = append(results, item.(*store.StoreItemSummary))
+	}
+	return results, nil
+}
+
 // PutStoreItem puts a new StoreItem object to the StoreItemsTable.
 func PutStoreItem(DB *dynamo.DbInfo, item *store.StoreItem) error {
-	err := dynamo.CreateItem(DB.Svc, item, DB.Tables[StoreItemsTable])
+	err := dynamo.CreateItem(DB.Svc, item, DB.Tables[StoreItemsTable()])
 	if err != nil {
 		log.Printf("PutStoreItem failed: %v", err)
+		return err
+	}
+	return nil
+}
+
+func UpdateStoreItem(DB *dynamo.DbInfo, subcat, itemID, field string, value interface{}) error {
+	// create and set update query
+	q := dynamo.CreateNewQueryObj(subcat, itemID)
+	q.UpdateCurrent(field, value)
+
+	// build expression
+	update := dynamo.NewUpdateExpr()
+	update.Set(field, value)
+
+	eb := dynamo.NewExprBuilder()
+	eb.SetUpdate(update)
+	expression, err := eb.BuildExpression()
+	if err != nil {
+		log.Printf("UpdateStoreItem failed: %v", err)
+		return err
+	}
+
+	// update DB object
+	err = dynamo.UpdateItem(DB.Svc, q, DB.Tables[StoreItemsTable()], expression)
+	if err != nil {
+		log.Printf("UpdateStoreItem failed: %v", err)
+		return err
+	}
+	return nil
+}
+
+func DeleteStoreItem(DB *dynamo.DbInfo, subcategory, itemID string) error {
+	q := dynamo.CreateNewQueryObj(subcategory, itemID)
+	err := dynamo.DeleteItem(DB.Svc, q, DB.Tables[StoreItemsTable()])
+	if err != nil {
+		log.Printf("DeleteStoreItemfailed: %v", err)
+		return err
+	}
+	return nil
+}
+
+// GetStoreItem retreives a StoreItem object from the StoreItemsTable.
+func GetStoreItemIndex(DB *dynamo.DbInfo, subcategory string) (*store.StoreItemIndex, error) {
+	q := dynamo.CreateNewQueryObj(subcategory, "")
+	expr := dynamo.NewExpression()
+	item, err := dynamo.GetItem(DB.Svc, q, DB.Tables[StoreItemsIndexTable()], &store.StoreItemIndex{}, expr)
+	if err != nil {
+		log.Printf("GetStoreItemIndex failed: %v", err)
+		return &store.StoreItemIndex{}, err
+	}
+	return item.(*store.StoreItemIndex), nil
+}
+
+// PutStoreItem puts a new StoreItem object to the StoreItemsTable.
+func PutStoreItemIndex(DB *dynamo.DbInfo, item *store.StoreItemIndex) error {
+	err := dynamo.CreateItem(DB.Svc, item, DB.Tables[StoreItemsIndexTable()])
+	if err != nil {
+		log.Printf("PutStoreItemIndex failed: %v", err)
+		return err
 	}
 	return nil
 }
 
 // GetStoreItemSummary retreives a StoreItemSummary object from the StoreItemsSummaryTable.
-func GetStoreItemSummmary(DB *dynamo.DbInfo, subcategory, itemID string) (*store.StoreItemSummary, error) {
+func GetStoreItemSummary(DB *dynamo.DbInfo, subcategory, itemID string) (*store.StoreItemSummary, error) {
 	q := dynamo.CreateNewQueryObj(subcategory, itemID)
 	expr := dynamo.NewExpression()
-	item, err := dynamo.GetItem(DB.Svc, q, DB.Tables[StoreItemsSummaryTable], &store.StoreItemSummary{}, expr)
+	item, err := dynamo.GetItem(DB.Svc, q, DB.Tables[StoreItemsSummaryTable()], &store.StoreItemSummary{}, expr)
 	if err != nil {
-		log.Printf("GetStoreItemSummmary failed: %v", err)
+		log.Printf("GetStoreItemSummary failed: %v", err)
 		return &store.StoreItemSummary{}, err
 	}
 	return item.(*store.StoreItemSummary), nil
 }
 
 // PutStoreItemSummary puts a new StoreItemSummary object to the StoreItemsSummaryTable.
-func PutStoreItemSummmary(DB *dynamo.DbInfo, item *store.StoreItemSummary) error {
-	err := dynamo.CreateItem(DB.Svc, item, DB.Tables[StoreItemsSummaryTable])
+func PutStoreItemSummary(DB *dynamo.DbInfo, item *store.StoreItemSummary) error {
+	err := dynamo.CreateItem(DB.Svc, item, DB.Tables[StoreItemsSummaryTable()])
 	if err != nil {
-		log.Printf("PutStoreItemSummmary failed: %v", err)
+		log.Printf("PutStoreItemSummary failed: %v", err)
+		return err
 	}
 	return nil
+}
+
+func UpdateStoreItemSummary(DB *dynamo.DbInfo, subcat, itemID, field string, value interface{}) error {
+	// create and set update query
+	q := dynamo.CreateNewQueryObj(subcat, itemID)
+	q.UpdateCurrent(field, value)
+
+	// build expression
+	update := dynamo.NewUpdateExpr()
+	update.Set(field, value)
+
+	eb := dynamo.NewExprBuilder()
+	eb.SetUpdate(update)
+	expression, err := eb.BuildExpression()
+	if err != nil {
+		log.Printf("UpdateStoreItemSummary failed: %v", err)
+		return err
+	}
+
+	// update DB object
+	err = dynamo.UpdateItem(DB.Svc, q, DB.Tables[StoreItemsSummaryTable()], expression)
+	if err != nil {
+		log.Printf("UpdateStoreIteSummary failed: %v", err)
+		return err
+	}
+	return nil
+}
+
+func DeleteStoreItemSummary(DB *dynamo.DbInfo, subcategory, itemID string) error {
+	q := dynamo.CreateNewQueryObj(subcategory, itemID)
+	err := dynamo.DeleteItem(DB.Svc, q, DB.Tables[StoreItemsSummaryTable()])
+	if err != nil {
+		log.Printf("DeleteStoreItemSummary failed: %v", err)
+		return err
+	}
+	return nil
+}
+
+// Scan StoreItemSummary objects for a given browsing category.
+// TO DO: ADD LOGIC FOR PAGINATION
+func ScanItemsForCategory(DB *dynamo.DbInfo, subcat string) ([]store.StoreItemSummary, error) {
+	items := []store.StoreItemSummary{}
+	model := store.StoreItemSummary{}
+
+	eb := dynamo.NewExprBuilder()
+	eb.SetFilter("sub_category", subcat)
+	expr, err := eb.BuildExpression()
+	if err != nil {
+		log.Printf("ScanItemsForCategory failed: %v", err)
+		return items, err
+	}
+
+	res, err := dynamo.ScanItems(DB.Svc, DB.Tables[StoreItemsSummaryTable()], subcat, model, expr)
+	if err != nil {
+		log.Printf("ScanItemsForCategory failed: %v", err)
+		return items, err
+	}
+
+	for _, r := range res {
+		items = append(items, r.(store.StoreItemSummary))
+	}
+	return items, nil
 }
 
 // GetShopping cart retreives a ShoppingCart object from the ShoppingCartsTable (primary key only).
 func GetShoppingCart(DB *dynamo.DbInfo, userID string) (*store.ShoppingCart, error) {
 	q := dynamo.CreateNewQueryObj(userID, "")
 	expr := dynamo.NewExpression()
-	item, err := dynamo.GetItem(DB.Svc, q, DB.Tables[ShoppingCartsTable], &store.ShoppingCart{}, expr)
+	item, err := dynamo.GetItem(DB.Svc, q, DB.Tables[ShoppingCartsTable()], &store.ShoppingCart{}, expr)
 	if err != nil {
 		log.Printf("GetShoppingCart failed: %v", err)
 		return &store.ShoppingCart{}, err
@@ -188,7 +349,7 @@ func GetShoppingCart(DB *dynamo.DbInfo, userID string) (*store.ShoppingCart, err
 
 // PutShoppingCart puts a new ShoppingCart object to the ShoppingCartsTable.
 func PutShoppingCart(DB *dynamo.DbInfo, cart *store.ShoppingCart) error {
-	err := dynamo.CreateItem(DB.Svc, cart, DB.Tables[ShoppingCartsTable])
+	err := dynamo.CreateItem(DB.Svc, cart, DB.Tables[ShoppingCartsTable()])
 	if err != nil {
 		log.Printf("PutShoppingCart failed: %v", err)
 	}
@@ -197,7 +358,7 @@ func PutShoppingCart(DB *dynamo.DbInfo, cart *store.ShoppingCart) error {
 
 // PutParcel adds a new store.Parcel object to the Parcels table.
 func PutParcel(DB *dynamo.DbInfo, parcel []*store.Parcel) error {
-	err := dynamo.CreateItem(DB.Svc, parcel, DB.Tables[ParcelsTable])
+	err := dynamo.CreateItem(DB.Svc, parcel, DB.Tables[ParcelsTable()])
 	if err != nil {
 		log.Printf("PutShoppingCart failed: %v", err)
 	}
@@ -216,7 +377,7 @@ func GetParcels(DB *dynamo.DbInfo, carrier string) ([]*store.Parcel, error) {
 		return parcels, err
 	}
 
-	items, err := dynamo.ScanItems(DB.Svc, DB.Tables[ParcelsTable], &store.Parcel{}, expr)
+	items, err := dynamo.ScanItems(DB.Svc, DB.Tables[ParcelsTable()], &store.Parcel{}, "", expr)
 	if err != nil {
 		log.Printf("GetParcels failed: %v", err)
 		return parcels, err
@@ -231,7 +392,7 @@ func GetParcels(DB *dynamo.DbInfo, carrier string) ([]*store.Parcel, error) {
 
 // PutShipment puts a new Shipment object to the ShipmentsTable.
 func PutShipment(DB *dynamo.DbInfo, shipment *store.Shipment) error {
-	err := dynamo.CreateItem(DB.Svc, shipment, DB.Tables[ShipmentsTable])
+	err := dynamo.CreateItem(DB.Svc, shipment, DB.Tables[ShipmentsTable()])
 	if err != nil {
 		log.Printf("PutShipment failed: %v", err)
 	}
@@ -242,7 +403,7 @@ func PutShipment(DB *dynamo.DbInfo, shipment *store.Shipment) error {
 func GetShipment(DB *dynamo.DbInfo, userID, orderID string) (*store.Shipment, error) {
 	q := dynamo.CreateNewQueryObj(userID, orderID)
 	expr := dynamo.NewExpression()
-	item, err := dynamo.GetItem(DB.Svc, q, DB.Tables[ShipmentsTable], &store.Shipment{}, expr)
+	item, err := dynamo.GetItem(DB.Svc, q, DB.Tables[ShipmentsTable()], &store.Shipment{}, expr)
 	if err != nil {
 		log.Printf("GetShipment failed: %v", err)
 		return &store.Shipment{}, err
@@ -251,31 +412,11 @@ func GetShipment(DB *dynamo.DbInfo, userID, orderID string) (*store.Shipment, er
 	return item.(*store.Shipment), nil
 }
 
-func GetShippingMethod(DB *dynamo.DbInfo, methodName string) (*store.ShippingMethod, error) {
-	q := dynamo.CreateNewQueryObj(methodName, "")
-	expr := dynamo.NewExpression()
-	item, err := dynamo.GetItem(DB.Svc, q, DB.Tables[ShippingMethodsTable], &store.ShippingMethod{}, expr)
-	if err != nil {
-		log.Printf("GetShippingMethod failed: %v", err)
-		return &store.ShippingMethod{}, err
-	}
-	return item.(*store.ShippingMethod), nil
-}
-
-// PutShoppingCart puts a new ShoppingCart object to the ShoppingCartsTable.
-func PutShippingMethod(DB *dynamo.DbInfo, method *store.ShippingMethod) error {
-	err := dynamo.CreateItem(DB.Svc, method, DB.Tables[ShippingMethodsTable])
-	if err != nil {
-		log.Printf("PutShippingMethod failed: %v", err)
-	}
-	return nil
-}
-
 // GetTransaction retreives a Transaction object from the TransactionsTable.
 func GetTransaction(DB *dynamo.DbInfo, userID, txID string) (*store.Transaction, error) {
 	q := dynamo.CreateNewQueryObj(userID, txID)
 	expr := dynamo.NewExpression()
-	item, err := dynamo.GetItem(DB.Svc, q, DB.Tables[TransactionsTable], &store.Transaction{}, expr)
+	item, err := dynamo.GetItem(DB.Svc, q, DB.Tables[TransactionsTable()], &store.Transaction{}, expr)
 	if err != nil {
 		log.Printf("GetTransaction failed: %v", err)
 		return &store.Transaction{}, err
@@ -285,7 +426,7 @@ func GetTransaction(DB *dynamo.DbInfo, userID, txID string) (*store.Transaction,
 
 // PutTransaction puts a new Transaction object to the TransactionsTable.
 func PutTransaction(DB *dynamo.DbInfo, tx *store.Transaction) error {
-	err := dynamo.CreateItem(DB.Svc, tx, DB.Tables[TransactionsTable])
+	err := dynamo.CreateItem(DB.Svc, tx, DB.Tables[TransactionsTable()])
 	if err != nil {
 		log.Printf("PutTransaction failed: %v", err)
 	}
@@ -317,7 +458,7 @@ func PutCustomer(DB *dynamo.DbInfo, user *store.Customer) error {
 func GetOrder(DB *dynamo.DbInfo, userID, orderID string) (*store.Order, error) {
 	q := dynamo.CreateNewQueryObj(userID, orderID)
 	expr := dynamo.NewExpression()
-	item, err := dynamo.GetItem(DB.Svc, q, DB.Tables[OrdersTable], &store.Order{}, expr)
+	item, err := dynamo.GetItem(DB.Svc, q, DB.Tables[OrdersTable()], &store.Order{}, expr)
 	if err != nil {
 		log.Printf("GetOrder failed: %v", err)
 		return &store.Order{}, err
@@ -335,7 +476,7 @@ func GetOrderItems(DB *dynamo.DbInfo, userID, orderID string) (*store.Order, err
 		log.Printf("GetOrderItems failed: %v", err)
 		return &store.Order{}, err
 	}
-	item, err := dynamo.GetItem(DB.Svc, q, DB.Tables[OrdersTable], &store.Order{}, expr)
+	item, err := dynamo.GetItem(DB.Svc, q, DB.Tables[OrdersTable()], &store.Order{}, expr)
 	if err != nil {
 		log.Printf("GetOrderItems failed: %v", err)
 		return &store.Order{}, err
@@ -347,7 +488,7 @@ func GetOrderItems(DB *dynamo.DbInfo, userID, orderID string) (*store.Order, err
 func GetOpenOrder(DB *dynamo.DbInfo, userID, orderID string) (*store.Order, error) {
 	q := dynamo.CreateNewQueryObj(userID, orderID)
 	expr := dynamo.NewExpression()
-	item, err := dynamo.GetItem(DB.Svc, q, DB.Tables[OpenOrdersTable], &store.Order{}, expr)
+	item, err := dynamo.GetItem(DB.Svc, q, DB.Tables[OpenOrdersTable()], &store.Order{}, expr)
 	if err != nil {
 		log.Printf("GetOpenOrder failed: %v", err)
 		return &store.Order{}, err
@@ -357,7 +498,7 @@ func GetOpenOrder(DB *dynamo.DbInfo, userID, orderID string) (*store.Order, erro
 
 // PutOrder puts a new Order object to the Orders table.
 func PutOrder(DB *dynamo.DbInfo, user *store.Order) error {
-	err := dynamo.CreateItem(DB.Svc, user, DB.Tables[OrdersTable])
+	err := dynamo.CreateItem(DB.Svc, user, DB.Tables[OrdersTable()])
 	if err != nil {
 		log.Printf("PutOrder failed: %v", err)
 	}
@@ -387,7 +528,7 @@ func UpdateOrderAddress(DB *dynamo.DbInfo, userID, orderID string, addr store.Ad
 	}
 
 	// update DB object
-	err = dynamo.UpdateItem(DB.Svc, q, DB.Tables[OrdersTable], expression)
+	err = dynamo.UpdateItem(DB.Svc, q, DB.Tables[OrdersTable()], expression)
 	if err != nil {
 		log.Printf("UpdateOrderAddress failed: %v", err)
 		return err
@@ -415,7 +556,7 @@ func UpdateOrderShippingInfo(DB *dynamo.DbInfo, userID, orderID, status string, 
 	}
 
 	// update DB object
-	err = dynamo.UpdateItem(DB.Svc, q, DB.Tables[OrdersTable], expression)
+	err = dynamo.UpdateItem(DB.Svc, q, DB.Tables[OrdersTable()], expression)
 	if err != nil {
 		log.Printf("UpdateOrderShippingInfo failed: %v", err)
 		return err
@@ -425,7 +566,7 @@ func UpdateOrderShippingInfo(DB *dynamo.DbInfo, userID, orderID, status string, 
 
 // PutOpenOrder puts a new Order object to the Orders table.
 func PutOpenOrder(DB *dynamo.DbInfo, order *store.Order) error {
-	err := dynamo.CreateItem(DB.Svc, order, DB.Tables[OpenOrdersTable])
+	err := dynamo.CreateItem(DB.Svc, order, DB.Tables[OpenOrdersTable()])
 	if err != nil {
 		log.Printf("PutOpenOrder failed: %v", err)
 	}
@@ -434,7 +575,7 @@ func PutOpenOrder(DB *dynamo.DbInfo, order *store.Order) error {
 
 func DeleteOpenOrder(DB *dynamo.DbInfo, userID, orderID string) error {
 	q := dynamo.CreateNewQueryObj(userID, orderID)
-	err := dynamo.DeleteItem(DB.Svc, q, DB.Tables[OpenOrdersTable])
+	err := dynamo.DeleteItem(DB.Svc, q, DB.Tables[OpenOrdersTable()])
 	if err != nil {
 		log.Printf("DeleteOpenOrder failed: %v", err)
 	}
@@ -445,7 +586,7 @@ func UpdateOrderPaymentStatus(DB *dynamo.DbInfo, customerID, orderID, status str
 	q := dynamo.CreateNewQueryObj(customerID, orderID)
 	expr := dynamo.NewExpression()
 	q.UpdateCurrent("payment_status", status)
-	err := dynamo.UpdateItem(DB.Svc, q, DB.Tables[OrdersTable], expr)
+	err := dynamo.UpdateItem(DB.Svc, q, DB.Tables[OrdersTable()], expr)
 	if err != nil {
 		log.Printf("UpdateOrderPaymentStatus failed: %v", err)
 		return err
@@ -457,7 +598,7 @@ func UpdateTxPaymentStatus(DB *dynamo.DbInfo, customerID, txID, status string) e
 	q := dynamo.CreateNewQueryObj(customerID, txID)
 	q.UpdateCurrent("payment_status", status)
 	expr := dynamo.NewExpression()
-	err := dynamo.UpdateItem(DB.Svc, q, DB.Tables[TransactionsTable], expr)
+	err := dynamo.UpdateItem(DB.Svc, q, DB.Tables[TransactionsTable()], expr)
 	if err != nil {
 		log.Printf("UpdateOrderPaymentStatus failed: %v", err)
 		return err
@@ -469,7 +610,7 @@ func UpdateTxPaymentMethod(DB *dynamo.DbInfo, customerID, txID, method string) e
 	q := dynamo.CreateNewQueryObj(customerID, txID)
 	q.UpdateCurrent("payment_method", method)
 	expr := dynamo.NewExpression()
-	err := dynamo.UpdateItem(DB.Svc, q, DB.Tables[TransactionsTable], expr)
+	err := dynamo.UpdateItem(DB.Svc, q, DB.Tables[TransactionsTable()], expr)
 	if err != nil {
 		log.Printf("UpdateOrderPaymentMethod failed: %v", err)
 		return err
@@ -481,7 +622,7 @@ func UpdateTxPaymentID(DB *dynamo.DbInfo, customerID, txID, paymentID string) er
 	q := dynamo.CreateNewQueryObj(customerID, txID)
 	q.UpdateCurrent("payment_tx_id", paymentID)
 	expr := dynamo.NewExpression()
-	err := dynamo.UpdateItem(DB.Svc, q, DB.Tables[TransactionsTable], expr)
+	err := dynamo.UpdateItem(DB.Svc, q, DB.Tables[TransactionsTable()], expr)
 	if err != nil {
 		log.Printf("UpdateOrderPaymentID failed: %v", err)
 		return err
@@ -546,7 +687,7 @@ func checkInventory(DB *dynamo.DbInfo, item *store.CartItem, bc chan map[string]
 	eb.SetProjection([]string{keyName})
 	expr, err := eb.BuildExpression()
 
-	check, err := dynamo.GetItem(DB.Svc, q, DB.Tables[StoreItemsTable], &store.StoreItem{}, expr)
+	check, err := dynamo.GetItem(DB.Svc, q, DB.Tables[StoreItemsTable()], &store.StoreItem{}, expr)
 	if err != nil {
 		log.Printf("checkInventory failed: %v", err)
 		bc <- map[string]bool{item.ItemID: false}
@@ -591,7 +732,7 @@ func UpdateInventoryCount(DB *dynamo.DbInfo, subcat, itemID, sizeKey string, cou
 		return "", err
 	}
 
-	err = dynamo.UpdateItem(DB.Svc, q, DB.Tables[StoreItemsTable], expression)
+	err = dynamo.UpdateItem(DB.Svc, q, DB.Tables[StoreItemsTable()], expression)
 	if err != nil {
 		if err.Error() == dynamo.ErrConditionalCheck {
 			return itemID, fmt.Errorf(ErrConditionalCheck)
